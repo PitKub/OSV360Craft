@@ -34,6 +34,9 @@ def main() -> int:
         app.setWindowIcon(QIcon(str(icon)))
     ctx = AppContext(SettingsStore())
     win = MainWindow(ctx)
+    # Fit the screen (a 1920x1080 laptop at 125-150 % scaling has far less room than 1440x900 suggests).
+    scr = app.primaryScreen().availableGeometry()
+    win.resize(min(1440, int(scr.width() * 0.92)), min(900, int(scr.height() * 0.9)))
     win.show()
     # Paths given on the command line are queued as if dropped on Batch Stitching.
     args = [a for a in sys.argv[1:] if not a.startswith("-")]

@@ -38,19 +38,21 @@ class KeyValueGrid(QWidget):
         self.grid.setColumnStretch(1, 1)
         self._labels: dict[str, QLabel] = {}
 
-    def set(self, key: str, value: str, state: str | None = None) -> None:
+    def set(self, key: str, value: str, state: str | None = None, tooltip: str = "") -> None:
         if key not in self._labels:
             r = self.grid.rowCount()
             k = QLabel(key)
             k.setObjectName("Muted")
             v = QLabel()
             v.setWordWrap(True)
+            v.setMinimumWidth(120)
             v.setTextInteractionFlags(Qt.TextSelectableByMouse)
             self.grid.addWidget(k, r, 0, Qt.AlignTop)
             self.grid.addWidget(v, r, 1)
             self._labels[key] = v
         lbl = self._labels[key]
         lbl.setText(value)
+        lbl.setToolTip(tooltip)
         lbl.setObjectName({"ok": "Ok", "warn": "Warn", "bad": "Bad"}.get(state or "", ""))
         lbl.style().unpolish(lbl)
         lbl.style().polish(lbl)

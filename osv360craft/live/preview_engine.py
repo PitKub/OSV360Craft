@@ -55,6 +55,7 @@ class PreviewConfig:
     cache_bytes: int
     source_colour: str | None = None
     segment_frames: int = 30
+    quick_first: bool = True   # show an interactive-purpose frame before the exact one
 
     def key(self) -> str:
         """Changes whenever anything that alters the picture changes."""
@@ -200,27 +201,43 @@ class PreviewEngine:
                                           stdin=subprocess.DEVNULL, **popen_flags())
             return self._proc
 
-    def _render_single(self, jid: int, key: str, n: int) -> None:
-        tmp = self.cfg.cache_dir / "work" / f"single_{jid}"
+    def _render_one(self, jid: int, n: int, purpose: str) -> tuple[Path | None, float, str]:
+        """One osvtool render of frame N; returns (png, seconds, error)."""
+        tmp = self.cfg.cache_dir / "work" / f"single_{jid}_{purpose}"
         tmp.mkdir(parents=True, exist_ok=True)
         out = tmp / "frame.png"
-        self.on_status(f"Stitching frame {n} ...")
         t0 = time.perf_counter()
-        p = self._spawn(self._args(str(out), frame=n, purpose="exact"), jid)
+        p = self._spawn(self._args(str(out), frame=n, purpose=purpose), jid)
         if not p:
-            return
+            return None, 0.0, ""
         text = p.communicate()[0].decode("utf-8", "replace")
-        if not self._alive(jid):
-            shutil.rmtree(tmp, ignore_errors=True)
-            return
-        if p.returncode != 0 or not out.exists():
+        if not self._alive(jid) or p.returncode != 0 or not out.exists():
             err = next((l[7:] for l in text.splitlines() if l.startswith("error: ")), text.strip()[-300:])
-            self.on_status(f"Frame {n} could not be stitched: {err}")
             shutil.rmtree(tmp, ignore_errors=True)
+            return None, 0.0, err if self._alive(jid) else ""
+        return out, time.perf_counter() - t0, ""
+
+    def _render_single(self, jid: int, key: str, n: int) -> None:
+        """A quick frame first (--purpose interactive: OpenOSV does not wait for its seam
+        analyses), then the exact one (--purpose exact) replaces it."""
+        if self.cfg.quick_first:
+            self.on_status(f"Frame {n}: quick preview ...")
+            out, dt, err = self._render_one(jid, n, "interactive")
+            if out is not None:
+                path = self.cache.put("quick-" + key, n, out)
+                shutil.rmtree(out.parent, ignore_errors=True)
+                self.on_stats({"quick_frame_seconds": dt, "cache_bytes": self.cache.used_bytes})
+                self.on_frame(n, path)
+            if not self._alive(jid):
+                return
+        self.on_status(f"Frame {n}: exact stitch (seam analyses) ...")
+        out, dt, err = self._render_one(jid, n, "exact")
+        if out is None:
+            if err:
+                self.on_status(f"Frame {n} could not be stitched: {err}")
             return
-        dt = time.perf_counter() - t0
         path = self.cache.put(key, n, out)
-        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(out.parent, ignore_errors=True)
         self.on_stats({"single_frame_seconds": dt, "cache_bytes": self.cache.used_bytes})
         self.on_status(f"Frame {n} stitched in {dt:.2f} s (exact)")
         self.on_frame(n, path)

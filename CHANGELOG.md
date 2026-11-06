@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Live Stitching showed no picture on Windows.**
+  - **The cause:** the OpenGL 360 viewer failed on start-up (PySide6 rejected an argument in one drawing call) and stayed black without saying so.
+  - **The fix:** the viewer is fixed, and is now tested with a real OpenGL context.
+  - **Fallback:** if OpenGL ever fails, the page switches to the flat software viewer and says why.
+- **Faster scrubbing.** A paused frame now appears first as a quick render (OpenOSV's interactive mode, without waiting for the seam analyses), then is replaced by the exact stitch. The default preview on a GPU is now 2K; 4K stays selectable.
+- **Fits 1920x1080 screens with scaling.**
+  - **Window:** it opens sized to the screen, so the timeline and Play button are no longer hidden.
+  - **Clip and performance panels:** they scroll instead of squashing their text.
+- **Clip panel.**
+  - **Lens count:** the cover picture inside an `.OSV` is no longer counted as a lens stream.
+  - **OpenOSV's file-reader notes:** these are summarised, with details on hover. For example, Osmo 360 II files report "index table entry 'camd' failed verification", which OpenOSV skips.
+
 - **No more antivirus false alarms from the build itself.**
   - **The problem:** the app was built as a single self-extracting EXE that unpacked its code into `%TEMP%` at every start. Microsoft Defender's machine-learning check flagged the unpacked `launcher.dll` (`Trojan:Win32/Bearfoos.A!ml`).
   - **The fix:** OSV360Craft is now a normal program folder (Nuitka standalone), and the installer installs that folder.

@@ -22,10 +22,15 @@ from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
+from osv360craft.utils.logging import get_logger
+
+log = get_logger(__name__)
+
 try:
     from PySide6.QtOpenGL import (QOpenGLBuffer, QOpenGLShader, QOpenGLShaderProgram, QOpenGLTexture,
                                   QOpenGLVertexArrayObject)
     from PySide6.QtOpenGLWidgets import QOpenGLWidget
+    from shiboken6 import VoidPtr
     HAVE_GL = True
 except ImportError:  # pragma: no cover
     HAVE_GL = False
@@ -161,6 +166,7 @@ class _Interaction:
 if HAVE_GL:
     class GLPanoramaViewer(_Interaction, QOpenGLWidget):
         viewChanged = Signal(float, float, float, float)
+        glFailed = Signal(str)
 
         def __init__(self, parent=None) -> None:
             QOpenGLWidget.__init__(self, parent)
@@ -177,6 +183,16 @@ if HAVE_GL:
             self._image = img
             self._dirty = True
             self.update()
+
+        def current_image(self) -> QImage | None:
+            return self._image
+
+        def _fail(self, msg: str) -> None:
+            if self.gl_ok:
+                self.gl_ok = False
+                self.gl_error = msg
+                log.error(msg)
+                self.glFailed.emit(msg)
 
         def initializeGL(self) -> None:
             try:
@@ -197,12 +213,21 @@ if HAVE_GL:
                 self._vbo.allocate(data, len(data))
                 f = self.context().functions()
                 f.glEnableVertexAttribArray(0)
-                f.glVertexAttribPointer(0, 2, 0x1406, 0, 0, 0)  # GL_FLOAT
+                # PySide6 takes the offset into the bound buffer as a VoidPtr, not an int.
+                f.glVertexAttribPointer(0, 2, 0x1406, 0, 0, VoidPtr(0))  # GL_FLOAT, not normalised, tight
                 self._vbo.release()
                 self._vao.release()
-            except Exception as e:  # report and let the page swap in the software viewer
-                self.gl_ok = False
-                self.gl_error = str(e)
+                self.context().aboutToBeDestroyed.connect(self._cleanup)
+            except Exception as e:  # report: the page swaps in the software viewer
+                self._fail(f"OpenGL viewer could not start: {e}")
+
+        def _cleanup(self) -> None:
+            """Free GL objects while the context is still current (avoids warnings on exit)."""
+            self.makeCurrent()
+            if self._tex is not None:
+                self._tex.destroy()
+                self._tex = None
+            self.doneCurrent()
 
         def _upload(self) -> None:
             if self._tex is not None:
@@ -216,6 +241,12 @@ if HAVE_GL:
             self._dirty = False
 
         def paintGL(self) -> None:
+            try:
+                self._paint()
+            except Exception as e:
+                self._fail(f"OpenGL viewer failed while drawing: {e}")
+
+        def _paint(self) -> None:
             f = self.context().functions()
             f.glClearColor(0.07, 0.07, 0.08, 1.0)
             f.glClear(0x4000)
@@ -255,6 +286,9 @@ class SoftwarePanoramaViewer(_Interaction, QWidget):
     def set_image(self, img: QImage) -> None:
         self._image = img
         self.update()
+
+    def current_image(self) -> QImage | None:
+        return self._image
 
     def paintEvent(self, e) -> None:
         p = QPainter(self)

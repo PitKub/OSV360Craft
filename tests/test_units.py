@@ -214,7 +214,7 @@ def test_plan_nvidia_amd_cpu():
     from osv360craft.hardware.benchmark import BenchmarkResult
     nv = _machine("NVIDIA", "RTX 4080", 16, 8.9, {"cuda", "opencl"}, {"hevc_nvenc": True, "libx265": True})
     p = make_plan(nv, ExportSettings())
-    assert (p.device, p.encoder, p.crf, p.preview_mode, p.concurrency) == ("cuda", "hevc_nvenc", 16, "4k", 1)
+    assert (p.device, p.encoder, p.crf, p.preview_mode, p.concurrency) == ("cuda", "hevc_nvenc", 16, "2k", 1)
     assert p.device_fallbacks == ["opencl", "cpu"]
     amd = _machine("AMD", "RX 7800 XT", 16, None, {"opencl"}, {"hevc_nvenc": False, "hevc_amf": True, "libx265": True})
     p = make_plan(amd, ExportSettings(), "quality")

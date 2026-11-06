@@ -15,12 +15,12 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QPushButton,
-                               QSlider, QSplitter, QVBoxLayout, QWidget)
+                               QScrollArea, QSlider, QSplitter, QVBoxLayout, QWidget)
 
 from osv360craft.core import osv_probe
 from osv360craft.hardware import gpu_detector
 from osv360craft.hardware.auto_optimizer import PREVIEW_MODES
-from osv360craft.live.panorama_viewer import make_viewer
+from osv360craft.live.panorama_viewer import SoftwarePanoramaViewer, make_viewer
 from osv360craft.live.preview_engine import PreviewConfig, PreviewEngine
 from osv360craft.ui.widgets import KeyValueGrid
 from osv360craft.utils import process_manager as pm
@@ -87,10 +87,11 @@ class LiveStitchingPage:
         left = QWidget()
         ll = QVBoxLayout(left)
         ll.setContentsMargins(0, 0, 0, 0)
-        self.viewer = make_viewer()
-        self.viewer.setMinimumSize(640, 360)
-        self.viewer.viewChanged.connect(self._view_changed)
-        ll.addWidget(self.viewer, 1)
+        self.viewer_box = QVBoxLayout()
+        self.viewer_box.setContentsMargins(0, 0, 0, 0)
+        self.viewer = None
+        self._install_viewer(make_viewer())
+        ll.addLayout(self.viewer_box, 1)
         tl = QHBoxLayout()
         self.b_play = QPushButton("Play")
         self.b_play.clicked.connect(self.toggle_play)
@@ -127,6 +128,7 @@ class LiveStitchingPage:
         self.src_img = QLabel("-")
         self.src_img.setAlignment(Qt.AlignCenter)
         self.src_img.setMinimumHeight(120)
+        self.src_img.setMinimumWidth(160)
         v2.addWidget(self.src_img)
         rl.addWidget(g2)
         g3 = QGroupBox("Performance")
@@ -146,7 +148,13 @@ class LiveStitchingPage:
         v4.addWidget(b_frame)
         rl.addWidget(g4)
         rl.addStretch(1)
-        split.addWidget(right)
+        side = QScrollArea()
+        side.setWidgetResizable(True)
+        side.setFrameShape(QScrollArea.NoFrame)
+        side.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        side.setWidget(right)
+        side.setMinimumWidth(340)
+        split.addWidget(side)
         split.setStretchFactor(0, 3)
         split.setStretchFactor(1, 1)
         root.addWidget(split, 1)
@@ -166,6 +174,28 @@ class LiveStitchingPage:
         self.widget.dragEnterEvent = self._drag_enter
         self.widget.dropEvent = self._drop
         self._apply_plan_default()
+
+    # ---- viewer -----------------------------------------------------------
+    def _install_viewer(self, v) -> None:
+        old = self.viewer
+        v.setMinimumSize(480, 270)
+        v.viewChanged.connect(self._view_changed)
+        if hasattr(v, "glFailed"):
+            v.glFailed.connect(self._gl_failed)
+        if old is not None:
+            img = old.current_image()
+            v.view.flat, v.view.guide = old.view.flat, old.view.guide
+            self.viewer_box.removeWidget(old)
+            old.hide()
+            old.deleteLater()
+            if img is not None:
+                v.set_image(img)
+        self.viewer = v
+        self.viewer_box.addWidget(v, 1)
+
+    def _gl_failed(self, msg: str) -> None:
+        self.status.setText(msg + " - switched to the flat software viewer (sphere view needs OpenGL).")
+        self._install_viewer(SoftwarePanoramaViewer())
 
     # ---- opening --------------------------------------------------------
     def _drag_enter(self, e) -> None:
@@ -227,7 +257,8 @@ class LiveStitchingPage:
         self.info.set("Camera", ci.camera or "unknown")
         self.info.set("Proxy (.LRF)", "found" if find_proxy(Path(ci.path)) else "none")
         if ci.warnings:
-            self.info.set("Notes", "; ".join(ci.warnings[:3]), "warn")
+            self.info.set("OpenOSV notes", f"{len(ci.warnings)} note(s) from OpenOSV's file reader - hover for details",
+                          "warn", tooltip="\n".join(ci.warnings))
 
     # ---- configuration --------------------------------------------------
     def _apply_plan_default(self) -> None:
@@ -359,8 +390,10 @@ class LiveStitchingPage:
     def _on_stats(self, d: dict) -> None:
         if "render_fps" in d:
             self.perf.set("Stitching", f"{d['render_fps']:.1f} fps on {str(d.get('device', '?')).upper()}")
+        if "quick_frame_seconds" in d:
+            self.perf.set("Quick frame", f"{d['quick_frame_seconds']:.2f} s (shown first)")
         if "single_frame_seconds" in d:
-            self.perf.set("Exact frame", f"{d['single_frame_seconds']:.2f} s")
+            self.perf.set("Exact frame", f"{d['single_frame_seconds']:.2f} s (includes OpenOSV's seam analyses)")
         if "cache_bytes" in d:
             self.perf.set("Frame cache", human_bytes(d["cache_bytes"]))
         b = self.ctx.bench
@@ -401,8 +434,8 @@ class LiveStitchingPage:
 
     def _on_source(self, img) -> None:
         if img is not None and not img.isNull():
-            self.src_img.setPixmap(QPixmap.fromImage(img).scaledToWidth(min(420, self.src_img.width() or 420),
-                                                                         Qt.SmoothTransformation))
+            width = max(160, min(420, self.src_img.width() - 4))
+            self.src_img.setPixmap(QPixmap.fromImage(img).scaledToWidth(width, Qt.SmoothTransformation))
 
     def _view_changed(self, yaw: float, pitch: float, roll: float, fov: float) -> None:
         self.view_lbl.setText(f"yaw {yaw:.1f}, pitch {pitch:.1f}, roll {roll:.1f}, FOV {fov:.0f}")

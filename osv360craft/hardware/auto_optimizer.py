@@ -116,21 +116,18 @@ def choose_encoder(hw: HardwareReport, ex: ExportSettings, profile: str) -> tupl
 def choose_preview(hw: HardwareReport, device: str, profile: str, bench: BenchmarkResult | None) -> tuple[str, str]:
     if profile == "performance":
         return "performance", "PERFORMANCE profile"
-    pg = hw.primary_gpu
-    vram = (pg.vram_total_bytes or 0) if pg else 0
+    # 2K is the default on a GPU: every paused frame is a separate OpenOSV render, so its
+    # latency matters more than size. 4K stays one click away in Live Stitching.
     if bench and bench.preview_fps:
-        # The benchmark rendered at 1920x960; pick the largest mode that should still stream >= 10 fps.
+        # The benchmark rendered at 1920x960.
         fps = bench.preview_fps
-        if fps >= 40 and device != "cpu":
+        if fps >= 120 and device != "cpu":
             return "4k", f"benchmark preview speed {fps:.0f} fps at 2K leaves headroom for 4K"
         if fps >= 10:
             return "2k", f"benchmark preview speed {fps:.0f} fps at 2K"
         return "performance", f"benchmark preview speed only {fps:.1f} fps at 2K"
-    if device == "cuda" and vram >= 8 * GIB:
-        return ("4k" if profile != "quality" or vram < 16 * GIB else "4k"), \
-            f"CUDA with {human_bytes(vram)} VRAM (not yet benchmarked)"
     if device in ("cuda", "opencl", "metal"):
-        return "2k", f"GPU renderer {device} (not yet benchmarked)"
+        return "2k", f"GPU renderer {device} - 2K keeps paused frames quick (4K selectable)"
     return "performance", "CPU renderer"
 
 

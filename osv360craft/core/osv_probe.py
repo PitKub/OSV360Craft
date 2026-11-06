@@ -141,7 +141,10 @@ def apply_ffprobe(ci: ClipInfo, ffprobe: str | None) -> None:
         streams = json.loads(r.stdout).get("streams", [])
     except ValueError:
         return
-    video = [s for s in streams if s.get("codec_type") == "video"]
+    # Cover pictures and thumbnails are "video" streams too; only real video tracks are lenses.
+    video = [s for s in streams if s.get("codec_type") == "video"
+             and not (s.get("disposition") or {}).get("attached_pic")
+             and s.get("codec_name") not in ("mjpeg", "png", "bmp")]
     ci.video_streams = len(video)
     if video:
         v = video[0]
