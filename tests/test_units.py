@@ -291,6 +291,7 @@ def test_windows_detectors_run_without_other_programs():
 def test_fisheye_calibration_matches_openosv_conventions():
     """Probe calibration -> proxy-half parameters: 8K full frame, 6K crop, centre offset, extrinsics."""
     import math as _m
+    pytest.importorskip("numpy")
     from fisheye_synth import calibration
     from osv360craft.live import fisheye_calib as fc
     cal = calibration()

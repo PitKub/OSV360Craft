@@ -1,2 +1,4 @@
 -r requirements.txt
 pytest>=8
+# tests only (synthetic camera frames); not needed by the app
+numpy>=2
