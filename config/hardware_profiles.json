@@ -1,0 +1,6 @@
+{
+  "_comment": "Processing profiles. 'crf' applies only when Export Settings > Quality is 'Automatic'; a quality chosen by the user always wins. 'preview' is the preview mode used when no benchmark exists (auto = chosen from the GPU).",
+  "auto":        {"label": "AUTO - recommended", "crf": 16, "preview": "auto"},
+  "quality":     {"label": "QUALITY",            "crf": 12, "preview": "auto"},
+  "performance": {"label": "PERFORMANCE",        "crf": 20, "preview": "performance"}
+}

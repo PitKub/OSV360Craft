@@ -1,0 +1,109 @@
+Reframe or stitch frames to stills or an HDR MP4
+Usage: render [OPTIONS] file
+
+Positionals:
+  file TEXT REQUIRED          Input .OSV (or .LRF) clip
+
+Options:
+  -h,--help                   Print this help message and exit
+  --help-all                  Show help for every sub-command
+  --use-user-defaults         Start from the Source Settings saved in Premiere as the default for new clips (OPENOSV_DEFAULTS_FILE, else %APPDATA%\OpenOSV\defaults.json); options given here still win
+[Option Group: Geometry conventions]
+  Options:
+    --calib TEXT [auto]         Calibration set: auto|native|lens-guards|underwater
+    --protector TEXT [auto]     Lens-protector field-angle correction: auto|none|forward|inverse (auto = when --calib resolves to lens protectors)
+    --stitch-distance FLOAT     Use the far_XX preset nearest this distance (m)
+    --crop-scale FLOAT          Override the sensor->stream scale (6K verified: 0.794492)
+    --focal-source TEXT [dfl]   dfl (digital_focal_length) | scaled
+    --extrinsic-order TEXT [wxyz] 
+                                wxyz|xyzw
+    --extrinsic-sense TEXT [body2lens] 
+                                body2lens|lens2body
+    --lens-fov FLOAT [195.18]   Usable lens FOV in degrees
+    --feather FLOAT [4]         Seam feather width in degrees
+    --occlusion,--no-occlusion{false}
+                                Apply the calibration occlusion polygon
+    --hide-mount TEXT           Source Settings Hide Mount: on (the calibration occlusion polygons) | off (none) | auto (kept only where the lenses disagree on the clip's nine sample frames); wins over --occlusion
+    --blend,--no-blend{false}   Feather-blend the two lenses (off = nearest lens)
+[Option Group: Stabilisation]
+  Options:
+    --stab TEXT [off]           off|horizon|full|smooth|smooth-horizon
+    --attitude-convention TEXT [auto] 
+                                auto (= xyzw-w2b-z-rig) | <order>-<sense>-<up>[-rig] e.g. xyzw-b2w-ny (the 0.5.0 reading), wxyz-w2b-z; up = y|z|ny|nz; -rig relabels the IMU axes into the rig's
+    --smooth-sigma FLOAT [15]   Gaussian sigma in frames for --stab smooth and smooth-horizon
+[Option Group: Colour]
+  Options:
+    --color TEXT [pq]           pq|hlg|709|linear|dlogm
+    --fit TEXT [osmo360]        D-Log M curve: osmo360 (DJI-matched, also for Pocket 3)|avata360|dji|pocket3 (legacy)
+    --input-encoding TEXT [auto] 
+                                auto|dlogm|hlg|normal
+    --exposure FLOAT [0]        Exposure offset in stops
+    --look TEXT [dji]           Rec.709 look: dji (DJI Studio, default) | standard
+    --hdr-peak TEXT [1000]      PQ output's peak in nits: 1000 (default, no roll-off) | 600 | 400 | 203 (SDR-safe)
+    --tone TEXT [aces-bright]   HDR transfer function (D-Log M to pq|hlg): aces-bright (default, outdoor) | aces-detailed (indoor) | bt2408-natural | bt2408-punchy | bt2408-neutral
+[Option Group: Backends]
+  Options:
+    --hw TEXT [none]            Decoder acceleration: none|d3d11va|cuda|auto
+    --device TEXT [auto]        Renderer: cpu|cuda|opencl|auto
+    --cl-device TEXT            OpenCL device index (0, 1, ...) or name/vendor substring (e.g. 'arc', 'amd'); overrides OSV_CL_DEVICE
+    --threads INT [0]           CPU threads (0 = all)
+[Option Group: Engine]
+  Options:
+    --engine TEXT:{plugin,classic} [plugin] 
+                                plugin (default): the Premiere / Resolve plug-ins' own clip engine - every frame as Premiere renders a new clip, with its Source Settings defaults for whatever is not given here | classic: the research pipeline, every analysis off unless asked for
+    --flare,--no-flare{false}   plugin engine: sun ghost removal (Source Settings default: on)
+    --parallax-grid TEXT        plugin engine: follows (per moment) | steady (one correction for the clip) | auto (default)
+    --lens-align TEXT           plugin engine: off | auto (default; fit the small rotation between the lenses per clip)
+    --lens-focal TEXT           plugin engine: auto (default; the recorded focal where it matches each lens's calibration) | camera (the recorded focal whenever it fits the stream) | calibration (each lens's own)
+    --purpose TEXT:{exact,interactive,playback,play} [exact] 
+                                plugin engine: exact (default; export or a parked frame - every analysis made first) | interactive (playback: never waits for an analysis) | playback (the playback == parked check: the first frame parked, the range played twice, the second pass written, each frame re-asked until final) | play (the first frame parked, then one Interactive pass written as it came back: what a viewer sees during playback)
+    --scene-light TEXT          auto | day | night: the photometric profile (night: a short, narrow sky seam field, no exposure match, no lens shading).  Default: auto with the plugin engine (the camera's metered light, confirmed by the sky); day with --engine classic
+[Option Group: Frames]
+  Options:
+    --frame INT [-1]            Single timeline frame index (a clip that dropped frames while recording is presented at its nominal rate with each gap held, as in the plug-ins; extract --frame addresses recorded samples)
+    --range TEXT                Timeline frame range a-b (see --frame)
+    --all                       Every timeline frame (see --frame); an .mp4 then stays in step with the audio
+[Option Group: Output]
+  Options:
+    --mode TEXT [reframe]       reframe|equirect|equirect-polar
+    --proj TEXT [rectilinear]   rectilinear|fisheye|stereographic|eye-offset
+    --preset TEXT               crystal-ball|asteroid|wide|ultra-wide|dewarping
+    --fov FLOAT [90]            Horizontal FOV in degrees
+    --distortion FLOAT [0]      Eye offset for --proj eye-offset: 0 = rectilinear, 1 = stereographic (overrides the preset)
+    --yaw FLOAT [0]             Pan angle (deg)
+    --pitch FLOAT [0]           Tilt angle (deg)
+    --roll FLOAT [0]            Roll angle (deg)
+    --correction FLOAT [0]      Correction (horizon) angle (deg)
+    --size TEXT [1920x1080]     Output size WxH
+    --seam-search,--no-seam-search{false}
+                                Per-column seam disparity correction
+    --parallax,--no-parallax{false}
+                                The seam band's one correction field: a mesh warp solved on the optical flow, the lines detected at the seam and (with --seam-search) the seam table as its prior; the table alone without it
+    --seam-carve                Carve the seam through the overlap by dynamic programming and blend narrowly along it (no doubled near objects); composes with --parallax / --seam-search
+    --flow-backend TEXT [auto]  auto|classical|neural
+    --gain,--no-gain{false}     Exposure matching between lenses
+    --blend-fov FLOAT           Render-blend lens FOV in degrees; the analyses keep --lens-fov (default: --lens-fov minus 5.2, the 2.6 deg seam edge inset)
+    --blend-feather FLOAT [3]   Render-blend feather in degrees (analyses: --feather)
+    --photo TEXT [off]          Photometric seam field: off | rim (per-longitude usable rim) | full (rim + 2-D gain; replaces --gain)
+    --photo-strength FLOAT [1]  Gain-field strength 0..1 (--photo full)
+    --photo-decay FLOAT [20]    Gain-field decay beyond the overlap, degrees
+    --shading TEXT [off]        Lens shading correction: off | auto (each lens's rim structure measured from its own sky and added back before the blend; the photometric field and --gain are then measured on the corrected lenses)
+    --shading-strength FLOAT [1] 
+                                Lens shading strength 0..1 (--shading auto)
+    --seam-blend FLOAT [1.5]    Seam Blend: carved-seam feather where the lenses agree, degrees 0.2..8
+    --parallax-blend FLOAT [0.35] 
+                                Parallax Blend: feather where they disagree, degrees 0..4 (0 = hard cut)
+    --seam-smoothing FLOAT [0]  Seam Smoothing: two-band blend half width, degrees 0..8 (0 = off)
+    --near-offset FLOAT [0]     Near Offset: shift along the seam where the lenses disagree, degrees -3..3
+    --far-offset FLOAT [0]      Far Offset: shift along the seam where they agree, degrees -3..3
+    --seam-low-sigma FLOAT [-1] 
+                                Seam Smoothing low-band blur sigma, degrees (research; default: a third of the width)
+    --seam-interval INT [1]     Re-run the analyses every N frames
+    --out TEXT REQUIRED         Output: image (.png/.tif/.exr, %05d pattern) or .mp4
+    --alpha                     Write the coverage alpha as a 4th channel into .exr / .tif / .png stills (default: RGB only; videos carry no alpha)
+    --ffmpeg TEXT               ffmpeg executable for .mp4 output
+    --codec TEXT [hevc_nvenc]   Video encoder (hevc_nvenc, libx265, ...)
+    --crf INT [18]              Quality (crf / cq)
+    --no-audio                  Do not copy the source audio into the .mp4
+    --spherical-metadata,--no-spherical-metadata{false}
+                                Tag an --mode equirect .mp4 / .mov as 360 video (Spherical Video V1 + V2) for YouTube, VR players and 360 editors (default: on; no effect on flat outputs)

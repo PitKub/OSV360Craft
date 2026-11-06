@@ -1,0 +1,16 @@
+{
+  "ui": {"theme": "dark"},
+  "paths": {"osvtool": "", "ffmpeg": "", "project_root": ""},
+  "processing": {"profile": "auto", "allow_concurrency": false},
+  "batch": {"existing": "unique", "save_audio": false, "decode_check": true, "keep_failed": false},
+  "benchmark": {"offer": true},
+  "orientation": {"initial_yaw": 0.0},
+  "export": {
+    "mode": "equirect", "size": "native", "codec_family": "hevc", "encoder": "auto", "quality": "auto",
+    "custom_crf": 16, "custom_bitrate_mbps": null, "keep_audio": true, "spherical_metadata": true,
+    "frame_range": null, "yaw": 0.0, "pitch": 0.0, "roll": 0.0, "fov": 100.0,
+    "colour": {"output": "source", "tone": null, "hdr_peak": null},
+    "stitch": {}
+  },
+  "recent": {"projects": []}
+}
