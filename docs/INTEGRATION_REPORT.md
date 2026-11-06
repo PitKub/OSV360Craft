@@ -101,7 +101,12 @@ OpenOSV's NOTICE records that it contains no DJI code, binaries, models, LUTs or
   - **Speed:** playback speed equals this machine's stitching speed at the preview size, which is measured and shown.
   - **Measured upstream (RTX 5090):** decoding both lenses takes 2.1 ms per frame pair, and rendering one 4K view takes about 0.7 ms. Writing PNG and process start-up add overhead on top.
   - **8K60:** real-time 8K/60 playback through this path is **not** expected on typical hardware. The 2K and Performance modes are the fast paths.
-- **Next step, if real-time is needed:** a small C++ preview host linked against OpenOSV's libraries (`Pipeline`, `GpuClipDecoder`, `CudaRenderer`/`OpenClRenderer`). It would hand frames to the viewer through shared memory and remove the per-segment process start and PNG encoding. This needs an OpenOSV source build and tracking its internal API. It was deliberately left out of 1.0.
+- **Real-time quick preview (implemented after 1.0.0's first test on real footage):**
+  - **Source:** the camera's `.LRF` proxy (2048 × 1024) is decoded by FFmpeg in real time. Without one, the `.OSV`'s two lens streams are decoded with NVDEC and scaled with `scale_cuda`.
+  - **Stitching:** the GPU projects each lens with OpenOSV's calibration from `osvtool probe --json`: Kannala–Brandt 5 intrinsics and `camExtriQ`, scaled to the 1024 px half by OpenOSV's own rule (`1024/3840` for 8K, `1024/3776` for 6K, `c = 512 + (c_cal - 1920) * scale`). The lenses are feathered over the last 4° of the 195.18° usable field.
+  - **What is skipped:** seam carving, the photometric fields and colour conversion. A paused frame is replaced by the exact OpenOSV render.
+  - **Measured:** about 29–31 fps against a 30 fps source on the development machine's software OpenGL.
+- **Next step, if real-time full stitching is needed:** a small C++ preview host linked against OpenOSV's libraries (`Pipeline`, `GpuClipDecoder`, `CudaRenderer`/`OpenClRenderer`). It would hand frames to the viewer through shared memory and remove the per-segment process start and PNG encoding. This needs an OpenOSV source build and tracking its internal API. It was deliberately left out of 1.0.
 
 ## 8. What could not be verified in this development environment
 

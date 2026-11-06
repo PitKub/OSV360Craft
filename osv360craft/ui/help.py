@@ -58,10 +58,14 @@ lossless. In Live Stitching, turn the view and press <i>Use this heading</i>.</l
 <p>Open an <code>.OSV</code> (or drop it on the page). Drag to look around, use the mouse wheel to zoom,
 right-drag or Alt+drag to roll, double-click to reset. <b>F</b> switches between the sphere and the flat
 panorama, <b>H</b> shows a horizon guide.</p>
-<p>Every frame shown is a real OpenOSV stitch at the preview size. A paused frame is stitched exactly.
-During playback, frames appear as fast as your computer stitches them; the panel shows the real playback,
-stitching and decoding speeds. On most computers 8K playback is not real time; the 2K and Performance
-previews are faster. The preview size never changes the export.</p>
+<p><b>Real-time (camera proxy, quick stitch)</b> is the default preview. It plays the <code>.LRF</code> proxy that
+the Osmo 360 records next to every <code>.OSV</code>. If there is no <code>.LRF</code>, it decodes the
+<code>.OSV</code>'s two lenses on the graphics card. Your GPU projects the lenses onto the sphere with OpenOSV's
+lens calibration, so playback, scrubbing and looking around are immediate. Nothing is written to disk.
+It is a quick stitch: no seam carving, sky correction or colour conversion.</p>
+<p>When you <b>pause or scrub</b>, the quick frame is replaced by OpenOSV's exact stitch of that frame, which
+takes a few seconds at 8K. The 2K, 4K, Native and Performance modes play OpenOSV's exact stitch instead,
+slowly at 8K. The preview never changes the export.</p>
 
 <h2>Batch Stitching</h2>
 <ul>

@@ -124,7 +124,7 @@ class PreviewEngine:
         self.on_frame, self.on_status, self.on_stats = on_frame, on_status, on_stats
         self.cache = FrameCache(cfg.cache_dir / "preview", cfg.cache_bytes)
         self._lock = threading.Lock()
-        self._proc: subprocess.Popen | None = None
+        self._procs: list[subprocess.Popen] = []
         self._job_id = 0
         self._worker: threading.Thread | None = None
         self.last_render_fps: float | None = None
@@ -153,12 +153,13 @@ class PreviewEngine:
     def cancel(self) -> None:
         with self._lock:
             self._job_id += 1
-            p = self._proc
-        if p and p.poll() is None:
-            try:
-                p.kill()
-            except OSError:
-                pass
+            procs, self._procs = self._procs, []
+        for p in procs:
+            if p.poll() is None:
+                try:
+                    p.kill()
+                except OSError:
+                    pass
 
     # ---- internals ----------------------------------------------------
     def _start(self, fn: Callable[[int], None]) -> None:
@@ -197,9 +198,10 @@ class PreviewEngine:
         with self._lock:
             if not self._alive(jid):
                 return None
-            self._proc = subprocess.Popen(native_args(args), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                          stdin=subprocess.DEVNULL, **popen_flags())
-            return self._proc
+            proc = subprocess.Popen(native_args(args), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    stdin=subprocess.DEVNULL, **popen_flags())
+            self._procs = [q for q in self._procs if q.poll() is None] + [proc]
+            return proc
 
     def _render_one(self, jid: int, n: int, purpose: str) -> tuple[Path | None, float, str]:
         """One osvtool render of frame N; returns (png, seconds, error)."""
@@ -242,59 +244,98 @@ class PreviewEngine:
         self.on_status(f"Frame {n} stitched in {dt:.2f} s (exact)")
         self.on_frame(n, path)
 
-    def _render_segments(self, jid: int, key: str, start: int) -> None:
+    def _segment_cap(self) -> int:
+        """Largest playback segment the frame cache can hold twice over (frames are not
+        evicted before they are shown)."""
         c = self.cfg
+        try:
+            w, h = (int(x) for x in c.size.split("x"))
+        except ValueError:
+            w, h = 1920, 960
+        frame_bytes = max(1, int(w * h * 6 * 0.6))  # 16-bit PNG, typical compression
+        return max(c.segment_frames, min(480, c.cache_bytes // (2 * frame_bytes)))
+
+    def _render_segments(self, jid: int, key: str, start: int) -> None:
+        """Play from START. Every osvtool run pays the clip's start-up (seconds at 8K), so:
+        segments grow 30 -> 60 -> 120 ... up to what the cache holds, two segments are kept in
+        flight (the next one's start-up overlaps the current one's rendering; two OpenOSV
+        processes at most), and segments use --purpose interactive (no waiting for seam
+        analyses; a paused frame is still stitched exactly)."""
+        c = self.cfg
+        cap = self._segment_cap()
+        size = c.segment_frames
         n = start
-        while self._alive(jid) and n < c.frame_count:
-            # skip frames already cached
-            while n < c.frame_count and self.cache.get(key, n):
-                if not self._alive(jid):
-                    return
-                self.on_frame(n, self.cache.get(key, n))
-                n += 1
-            if n >= c.frame_count:
-                break
-            a, b = n, min(c.frame_count - 1, n + c.segment_frames - 1)
-            seg = c.cache_dir / "work" / f"seg_{jid}_{a}"
-            seg.mkdir(parents=True, exist_ok=True)
-            p = self._spawn(self._args(str(seg / "f_%06d.png"), rng=f"{a}-{b}", purpose="play"), jid)
-            if not p:
-                return
-            delivered: set[int] = set()
-            base: list[int | None] = [None]
-            reader = threading.Thread(target=self._read_progress, args=(p,), daemon=True)
-            reader.start()
+        active: list[dict] = []   # in frame order; at most two running
 
-            def harvest(final: bool) -> None:
-                files = sorted((int(m.group(1)), q) for q in seg.glob("f_*.png")
-                               if (m := re.match(r"f_(\d+)\.png$", q.name)))
-                if not files:
-                    return
-                if base[0] is None:
-                    base[0] = files[0][0]
-                # the newest file may still be being written unless the process ended
-                ready = files if final else files[:-1]
-                for num, q in ready:
-                    if num in delivered:
-                        continue
-                    delivered.add(num)
-                    frame = a + (num - base[0])  # works for absolute or relative numbering
-                    path = self.cache.put(key, frame, q)
-                    if self._alive(jid):
-                        self.on_frame(frame, path)
+        def launch(a: int) -> dict | None:
+            nonlocal size
+            b = min(c.frame_count - 1, a + size - 1)
+            seg_dir = c.cache_dir / "work" / f"seg_{jid}_{a}"
+            seg_dir.mkdir(parents=True, exist_ok=True)
+            proc = self._spawn(self._args(str(seg_dir / "f_%06d.png"), rng=f"{a}-{b}", purpose="interactive"), jid)
+            if proc is None:
+                return None
+            threading.Thread(target=self._read_progress, args=(proc,), daemon=True).start()
+            size = min(cap, size * 2)
+            return {"a": a, "b": b, "dir": seg_dir, "proc": proc, "delivered": set(), "base": None}
 
-            while p.poll() is None and self._alive(jid):
-                harvest(False)
+        def harvest(seg: dict, final: bool) -> int:
+            files = sorted((int(m.group(1)), q) for q in seg["dir"].glob("f_*.png")
+                           if (m := re.match(r"f_(\d+)\.png$", q.name)))
+            if not files:
+                return 0
+            if seg["base"] is None:
+                seg["base"] = files[0][0]
+            ready = files if final else files[:-1]  # the newest file may still be written
+            got = 0
+            for num, q in ready:
+                if num in seg["delivered"]:
+                    continue
+                seg["delivered"].add(num)
+                frame = seg["a"] + (num - seg["base"])  # absolute or relative numbering
+                path = self.cache.put(key, frame, q)
+                got += 1
+                if self._alive(jid):
+                    self.on_frame(frame, path)
+            return got
+
+        # frames already cached are delivered straight away
+        while n < c.frame_count and self.cache.get(key, n) and self._alive(jid):
+            self.on_frame(n, self.cache.get(key, n))
+            n += 1
+        try:
+            while self._alive(jid) and (n < c.frame_count or active):
+                if not active and n < c.frame_count:
+                    seg = launch(n)
+                    if seg is None:
+                        return
+                    active.append(seg)
+                    n = seg["b"] + 1
+                head = active[0]
+                harvest(head, False)
+                # keep two segments in flight: one starting up (seconds at 8K) while the other renders
+                if len(active) < 2 and n < c.frame_count:
+                    nxt = launch(n)
+                    if nxt is not None:
+                        active.append(nxt)
+                        n = nxt["b"] + 1
+                if head["proc"].poll() is not None:
+                    harvest(head, True)
+                    shutil.rmtree(head["dir"], ignore_errors=True)
+                    active.pop(0)
+                    if head["proc"].returncode != 0:
+                        self.on_status(f"Playback render stopped (osvtool exit {head['proc'].returncode}); see Logs")
+                        return
+                    continue
                 time.sleep(0.03)
-            if not self._alive(jid):
-                shutil.rmtree(seg, ignore_errors=True)
-                return
-            harvest(True)
-            shutil.rmtree(seg, ignore_errors=True)
-            if p.returncode != 0:
-                self.on_status(f"Playback render stopped (osvtool exit {p.returncode}); see Logs")
-                return
-            n = b + 1
+        finally:
+            for seg in active:
+                if seg["proc"].poll() is None:
+                    try:
+                        seg["proc"].kill()
+                    except OSError:
+                        pass
+                shutil.rmtree(seg["dir"], ignore_errors=True)
         if self._alive(jid):
             self.on_status("End of clip")
 

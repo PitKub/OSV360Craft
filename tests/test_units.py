@@ -286,3 +286,22 @@ def test_windows_detectors_run_without_other_programs():
     assert gpus and all(g.name for g in gpus)
     d = storage_detector.detect("C:\\")
     assert d.free_bytes and d.media_type in ("SSD", "HDD", "unknown")
+
+
+def test_fisheye_calibration_matches_openosv_conventions():
+    """Probe calibration -> proxy-half parameters: 8K full frame, 6K crop, centre offset, extrinsics."""
+    import math as _m
+    from fisheye_synth import calibration
+    from osv360craft.live import fisheye_calib as fc
+    cal = calibration()
+    fe8 = fc.from_probe(cal, 3840)
+    assert fe8.calibrated and abs(fe8.master.fx - 1129.0 * 1024 / 3840) < 1e-6
+    assert abs(fe8.master.cx - (512 + (1916.0 - 1920) * 1024 / 3840)) < 1e-6
+    fe6 = fc.from_probe(cal, 3000)
+    assert abs(fe6.slave.fx - 1129.0 * 1024 / 3776) < 1e-6
+    # the master lens looks along body +Y (forward): straight ahead lands near the centre of its half
+    u, v, th = fc.project(fe8.master, (0.0, 1.0, 0.0))
+    assert th < _m.radians(1.5) and abs(u - 512) < 15 and abs(v - 512) < 15
+    # body "up" is image up (smaller v) on both lenses
+    assert fc.project(fe8.master, (0.0, 0.7, 0.7))[1] < 512 and fc.project(fe8.slave, (0.0, -0.7, 0.7))[1] < 512
+    assert not fc.from_probe(None, 3840).calibrated

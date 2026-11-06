@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Real-time 360 preview.**
+  - **Source:** Live Stitching plays the `.LRF` proxy that the Osmo 360 records next to each `.OSV`. Without one, it decodes the `.OSV`'s two lenses on the GPU (NVDEC), scaled down. No proxy is created, nothing is written to disk.
+  - **Stitching:** the graphics card projects the lenses onto the sphere with OpenOSV's lens calibration (Kannala–Brandt lenses and the rotation of each lens, as read from the clip).
+  - **Exact frames:** pausing or scrubbing shows OpenOSV's exact stitch of that frame.
+  - **Tests:** the projection is checked on a synthetic camera frame on both lenses and across the seams.
+- **Viewer orientation fix.** The view rotation reached OpenGL transposed, so tilting while looking sideways twisted the view.
+- **Faster exact-stitch playback.** Segments grow and two OpenOSV runs overlap, so start-up no longer stalls playback every segment.
+- **Horizon guide** is now a smooth line one pixel wide at any zoom.
+- **More space around text.** There is more room inside panels and under section titles everywhere. The Live Stitching side panel fits its width.
+
 - **Live Stitching showed no picture on Windows.**
   - **The cause:** the OpenGL 360 viewer failed on start-up (PySide6 rejected an argument in one drawing call) and stayed black without saying so.
   - **The fix:** the viewer is fixed, and is now tested with a real OpenGL context.

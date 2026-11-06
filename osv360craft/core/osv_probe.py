@@ -48,6 +48,7 @@ class ClipInfo:
     pix_fmt: str | None = None
     video_streams: int | None = None
     warnings: list[str] = field(default_factory=list)
+    calibration: dict | None = None   # probe "calibration" (slave / master lens records), for the live preview
 
     # ---- derived values -------------------------------------------------
     @property
@@ -123,6 +124,9 @@ def parse_probe_json(doc: dict, path: str) -> ClipInfo:
     ci.firmware = _find_key(doc.get("clip"), {"firmware", "firmwareVersion", "fwVersion"})
     cal = doc.get("calibration")
     ci.has_calibration = None if "calibration" not in doc else bool(cal)
+    if isinstance(cal, dict) and isinstance(cal.get("slave"), dict) and isinstance(cal.get("master"), dict):
+        keep = ("fx", "fy", "cx", "cy", "k", "width", "height", "camExtriQ")
+        ci.calibration = {lens: {k: cal[lens].get(k) for k in keep} for lens in ("slave", "master")}
     ci.warnings += [str(w) for w in doc.get("warnings") or []]
     ci.ok = bool(ci.frame_count and ci.stream_w and ci.stream_h)
     if not ci.ok:

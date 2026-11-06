@@ -14,6 +14,8 @@ Environment switches:
   FAKE_FRAMES / FAKE_SIZE    frame count / lens size the probe reports
   FAKE_BAD_SIZE=1            render a wrong size (validation must fail)
   FAKE_SLOW=seconds          sleep per frame (for stop/cancel tests)
+  FAKE_CALIB_JSON=path       probe reports this calibration (slave / master lens records)
+  FAKE_STARTUP=seconds       sleep before rendering (clip open + GPU start-up)
 """
 
 import json
@@ -47,7 +49,8 @@ def probe(args):
            "fps": {"num": 30, "den": 1, "value": 30.0}, "durationSeconds": frames / 30,
            "streamW": lens, "streamH": lens, "mode": "K6", "colorModeName": os.environ.get("FAKE_COLOR", "DLogM"),
            "hasAudio": True, "audio": {"sampleRate": 48000, "channels": 2, "sampleCount": 48000 * frames // 30},
-           "isLrf": False, "clip": {"header": {"productName": "Osmo 360 (fake)"}}, "calibration": {"slots": 24},
+           "isLrf": False, "clip": {"header": {"productName": "Osmo 360 (fake)"}}, "calibration": (json.loads(open(os.environ["FAKE_CALIB_JSON"]).read()) if os.environ.get("FAKE_CALIB_JSON")
+                           else {"slots": 24}),
            "timeline": None, "warnings": []}
     if "--json" in args and opt(args, "--json") == "-":
         sys.stdout.write(json.dumps(doc))
@@ -68,6 +71,7 @@ def render(args):
         sys.stderr.write("[12:00:00.000] [osv] [error] CUDA: no device\n")
         err("renderer initialisation failed", 3)
     color = opt(args, "--color", "pq")
+    time.sleep(float(os.environ.get("FAKE_STARTUP", "0")))  # osvtool opening an 8K clip takes seconds
     frames_total = int(os.environ.get("FAKE_FRAMES", "12"))
     if "--frame" in args:
         a = b = int(opt(args, "--frame"))

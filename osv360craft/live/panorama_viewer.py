@@ -19,7 +19,7 @@ import math
 import struct
 
 from PySide6.QtCore import QPointF, Qt, Signal
-from PySide6.QtGui import QColor, QImage, QPainter, QPen
+from PySide6.QtGui import QColor, QImage, QMatrix3x3, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from osv360craft.utils.logging import get_logger
@@ -52,27 +52,66 @@ uniform float aspect;
 uniform int flatMode;
 uniform float flatYaw;
 uniform int guide;
+uniform float pixelAngle;
+// srcKind 0: equirect frame (OpenOSV's stitch); 1: dual fisheye (camera proxy, slave left / master right)
+uniform int srcKind;
+uniform mat3 lensR0;  uniform vec4 intr0;  uniform vec4 kA0;  uniform float kB0;
+uniform mat3 lensR1;  uniform vec4 intr1;  uniform vec4 kA1;  uniform float kB1;
+uniform float thetaMax;
+uniform float featherW;
 varying vec2 v;
 const float PI = 3.14159265358979;
+
+// One lens of the dual-fisheye frame: OpenOSV's Kannala-Brandt 5 model, d_lens = R * d_body.
+vec4 lensSample(vec3 body, mat3 R, vec4 intr, vec4 kA, float kB, float half_off, out float w) {
+    vec3 dl = R * body;
+    float h = length(dl.xy);
+    float th = atan(h, dl.z);
+    w = 0.0;
+    if (th >= thetaMax) return vec4(0.0);
+    float t2 = th * th;
+    float rf = th * (1.0 + t2 * (kA.x + t2 * (kA.y + t2 * (kA.z + t2 * (kA.w + t2 * kB)))));
+    vec2 dir = h > 1e-7 ? dl.xy / h : vec2(0.0);
+    vec2 px = vec2(intr.z + intr.x * rf * dir.x, intr.w + intr.y * rf * dir.y);
+    if (px.x < 0.0 || px.y < 0.0 || px.x > 1024.0 || px.y > 1024.0) return vec4(0.0);
+    w = smoothstep(0.0, featherW, thetaMax - th);
+    return texture2D(tex, vec2((half_off * 1024.0 + px.x) / 2048.0, px.y / 1024.0));
+}
+
 void main() {
-    vec2 tc;
+    vec3 d;
     if (flatMode == 1) {
-        tc = vec2(fract(v.x * 0.5 + 0.5 + flatYaw), 0.5 - v.y * 0.5);
+        float lon = (fract(v.x * 0.5 + 0.5 + flatYaw) - 0.5) * 2.0 * PI;
+        float la = v.y * 0.5 * PI;
+        d = vec3(cos(la) * sin(lon), sin(la), -cos(la) * cos(lon));
     } else {
-        vec3 d = normalize(rot * vec3(v.x * tanHalf * aspect, v.y * tanHalf, -1.0));
-        float lon = atan(d.x, -d.z);
-        float lat = asin(clamp(d.y, -1.0, 1.0));
-        tc = vec2(lon / (2.0 * PI) + 0.5, 0.5 - lat / PI);
+        d = normalize(rot * vec3(v.x * tanHalf * aspect, v.y * tanHalf, -1.0));
     }
-    vec4 c = texture2D(tex, tc);
-    if (guide == 1 && abs(tc.y - 0.5) < 0.0015) c = mix(c, vec4(1.0, 0.8, 0.0, 1.0), 0.8);
+    float lat = asin(clamp(d.y, -1.0, 1.0));
+    vec4 c;
+    if (srcKind == 1) {
+        vec3 body = vec3(d.x, -d.z, d.y);   // view (-Z forward, +Y up) -> OpenOSV body (Y forward, Z up)
+        float w0; float w1;
+        vec4 c0 = lensSample(body, lensR0, intr0, kA0, kB0, 0.0, w0);
+        vec4 c1 = lensSample(body, lensR1, intr1, kA1, kB1, 1.0, w1);
+        c = (w0 + w1) > 0.0 ? (c0 * w0 + c1 * w1) / (w0 + w1) : vec4(0.0, 0.0, 0.0, 1.0);
+    } else {
+        float lon = atan(d.x, -d.z);
+        c = texture2D(tex, vec2(lon / (2.0 * PI) + 0.5, 0.5 - lat / PI));
+    }
+    // horizon guide: lat = 0, about 1.5 screen pixels wide and anti-aliased at any zoom
+    if (guide == 1) {
+        float gw = 1.0 - smoothstep(0.75 * pixelAngle, 1.75 * pixelAngle, abs(lat));
+        c = mix(c, vec4(1.0, 0.8, 0.0, 1.0), 0.85 * gw);
+    }
     gl_FragColor = vec4(c.rgb, 1.0);
 }
 """
 
 
 def rotation_matrix(yaw: float, pitch: float, roll: float) -> list[float]:
-    """Column-major 3x3 for GLSL: R = Ry(yaw) * Rx(pitch) * Rz(roll), degrees."""
+    """R = Ry(yaw) * Rx(pitch) * Rz(roll) (degrees), as a ROW-major list of 9 values:
+    QMatrix3x3(values) takes rows, and setUniformValue hands GLSL the same matrix."""
     y, p, r = (math.radians(a) for a in (yaw, pitch, roll))
     cy, sy, cp, sp, cr, sr = math.cos(y), math.sin(y), math.cos(p), math.sin(p), math.cos(r), math.sin(r)
     ry = [[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]]
@@ -83,7 +122,7 @@ def rotation_matrix(yaw: float, pitch: float, roll: float) -> list[float]:
         return [[sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
 
     m = mul(mul(ry, rx), rz)
-    return [m[i][j] for j in range(3) for i in range(3)]
+    return [m[i][j] for i in range(3) for j in range(3)]
 
 
 class _ViewState:
@@ -179,13 +218,19 @@ if HAVE_GL:
             self._vao = None
             self.gl_ok = True
 
-        def set_image(self, img: QImage) -> None:
+        def set_image(self, img: QImage, fisheye=None) -> None:
+            """An equirect frame, or (with ``fisheye`` = live.fisheye_calib.DualFisheye) a
+            side-by-side dual-fisheye frame projected on the GPU."""
             self._image = img
+            self._fisheye = fisheye
             self._dirty = True
             self.update()
 
         def current_image(self) -> QImage | None:
             return self._image
+
+        def current_fisheye(self):
+            return getattr(self, "_fisheye", None)
 
         def _fail(self, msg: str) -> None:
             if self.gl_ok:
@@ -236,7 +281,8 @@ if HAVE_GL:
             self._tex = QOpenGLTexture(img, QOpenGLTexture.DontGenerateMipMaps)
             self._tex.setMinificationFilter(QOpenGLTexture.Linear)
             self._tex.setMagnificationFilter(QOpenGLTexture.Linear)
-            self._tex.setWrapMode(QOpenGLTexture.DirectionS, QOpenGLTexture.Repeat)
+            self._tex.setWrapMode(QOpenGLTexture.DirectionS, QOpenGLTexture.ClampToEdge if self.current_fisheye()
+                                  else QOpenGLTexture.Repeat)
             self._tex.setWrapMode(QOpenGLTexture.DirectionT, QOpenGLTexture.ClampToEdge)
             self._dirty = False
 
@@ -258,13 +304,28 @@ if HAVE_GL:
             self._tex.bind(0)
             self._prog.setUniformValue1i(self._prog.uniformLocation("tex"), 0)
             m = rotation_matrix(self.view.yaw, self.view.pitch, self.view.roll)
-            from PySide6.QtGui import QMatrix3x3
             self._prog.setUniformValue(self._prog.uniformLocation("rot"), QMatrix3x3(m))
             self._prog.setUniformValue1f(self._prog.uniformLocation("tanHalf"), math.tan(math.radians(self.view.fov) / 2))
             self._prog.setUniformValue1f(self._prog.uniformLocation("aspect"), self.width() / max(1, self.height()))
             self._prog.setUniformValue1i(self._prog.uniformLocation("flatMode"), 1 if self.view.flat else 0)
             self._prog.setUniformValue1f(self._prog.uniformLocation("flatYaw"), self.view.yaw / 360.0)
             self._prog.setUniformValue1i(self._prog.uniformLocation("guide"), 1 if self.view.guide else 0)
+            # angle covered by one screen pixel (vertical), for the horizon line width
+            px = (math.pi / max(1, self.height())) if self.view.flat else \
+                (2 * math.tan(math.radians(self.view.fov) / 2) / max(1, self.height()))
+            self._prog.setUniformValue1f(self._prog.uniformLocation("pixelAngle"), px)
+            fe = self.current_fisheye()
+            loc = self._prog.uniformLocation
+            self._prog.setUniformValue1i(loc("srcKind"), 1 if fe else 0)
+            if fe:
+                from PySide6.QtGui import QVector4D
+                for i, lens in enumerate((fe.slave, fe.master)):
+                    self._prog.setUniformValue(loc(f"lensR{i}"), QMatrix3x3([float(x) for x in lens.rows]))
+                    self._prog.setUniformValue(loc(f"intr{i}"), QVector4D(lens.fx, lens.fy, lens.cx, lens.cy))
+                    self._prog.setUniformValue(loc(f"kA{i}"), QVector4D(*lens.k[:4]))
+                    self._prog.setUniformValue1f(loc(f"kB{i}"), lens.k[4])
+                self._prog.setUniformValue1f(loc("thetaMax"), fe.theta_max)
+                self._prog.setUniformValue1f(loc("featherW"), fe.feather)
             self._vao.bind()
             f.glDrawArrays(0x0005, 0, 4)  # GL_TRIANGLE_STRIP
             self._vao.release()
@@ -283,12 +344,17 @@ class SoftwarePanoramaViewer(_Interaction, QWidget):
         self._image: QImage | None = None
         self.gl_ok = False
 
-    def set_image(self, img: QImage) -> None:
+    def set_image(self, img: QImage, fisheye=None) -> None:
+        # Without OpenGL a dual-fisheye frame is shown as it is (two circles); stitched frames as panoramas.
         self._image = img
+        self._fisheye = fisheye
         self.update()
 
     def current_image(self) -> QImage | None:
         return self._image
+
+    def current_fisheye(self):
+        return getattr(self, "_fisheye", None)
 
     def paintEvent(self, e) -> None:
         p = QPainter(self)

@@ -1,6 +1,7 @@
 """End-to-end tests of the batch pipelines, validation and the preview engine,
 using tests/fake_osvtool.py (osvtool's CLI contract) and real FFmpeg."""
 
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -186,3 +187,63 @@ def test_benchmark_stops_on_usage_error(tmp_path, fake_osvtool, fake_osv):
     b = Benchmark(fake_osvtool, None, str(tmp_path / "missing.OSV"), ["cuda", "opencl", "cpu"], [], None, "fp")
     res = b.run()
     assert list(res.device_errors) == ["cuda"] or len(res.device_errors) == 3
+
+
+def test_playback_overlaps_osvtool_startup(tmp_path, fake_osvtool, fake_osv, monkeypatch):
+    """Each osvtool run pays seconds of start-up at 8K; segments grow and the next one starts
+    while the current one renders, so playback does not stall for a start-up every segment."""
+    monkeypatch.setenv("FAKE_STARTUP", "1.0")
+    monkeypatch.setenv("FAKE_FRAMES", "60")
+    info = openosv_manager.inspect(Path(fake_osvtool))
+    got: dict[int, Path] = {}
+    done = threading.Event()
+
+    def on_frame(n, p):
+        got[n] = p
+        if len(got) == 60:
+            done.set()
+
+    cfg = PreviewConfig(fake_osvtool, str(fake_osv), 60, 30.0, "128x64", "709", "cpu", ExportSettings(),
+                        info.render_options, tmp_path / "cache", 200 * 1024 ** 2, "DLogM", segment_frames=5,
+                        quick_first=False)
+    eng = PreviewEngine(cfg, on_frame)
+    t0 = time.time()
+    eng.play_from(0)
+    assert done.wait(60), sorted(got)
+    elapsed = time.time() - t0
+    assert sorted(got) == list(range(60))
+    # 4 segments (5, 10, 20, 25 frames); one after another would take > 4 s of start-up alone
+    assert elapsed < 3.6, f"segments did not overlap ({elapsed:.1f} s)"
+    eng.cancel()
+
+
+def test_realtime_source_streams_lrf_and_osv(tmp_path, fake_osv):
+    """The real-time preview reads the camera's .LRF when present, else the .OSV's two lens
+    streams (side by side, as in the .LRF); frames come in order; nothing is written to disk."""
+
+    from osv360craft.live import realtime_source as rs
+
+    plan = rs.choose_source(str(fake_osv), nvdec=False)
+    assert plan.kind == "osv-cpu"            # no .LRF beside the fake clip
+    lrf = fake_osv.with_suffix(".LRF")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=2048x1024:r=30", "-t", "1",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-f", "mp4", str(lrf)], check=True)
+    plan = rs.choose_source(str(fake_osv), nvdec=True)
+    assert plan.kind == "lrf" and plan.path == str(lrf)
+    before = set(tmp_path.rglob("*"))
+    for p in (plan, rs.SourcePlan("osv-cpu", str(fake_osv), "")):
+        src = rs.RealtimeSource("ffmpeg", p, 30.0)
+        src.start(5)
+        got = []
+        t0 = time.time()
+        while len(got) < 5 and time.time() - t0 < 30:
+            item = src.get()
+            if item:
+                got.append(item)
+            else:
+                time.sleep(0.01)
+        src.stop()
+        assert [n for n, _ in got] == [5, 6, 7, 8, 9], p.kind
+        assert got[0][1].width() == 2048 and got[0][1].height() == 1024
+        assert rs.grab_frame("ffmpeg", p, 3, 30.0).width() == 2048
+    assert set(tmp_path.rglob("*")) == before  # no proxy or cache files created

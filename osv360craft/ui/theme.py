@@ -32,9 +32,10 @@ def stylesheet(t: dict) -> str:
     QLabel#PageTitle {{ font-size: 16pt; font-weight: 600; padding: 4px 0 8px 0; }}
     QLabel#Muted, QLabel[muted="true"] {{ color: {t['muted']}; }}
     QLabel#Ok {{ color: {t['ok']}; }} QLabel#Warn {{ color: {t['warn']}; }} QLabel#Bad {{ color: {t['bad']}; }}
-    QGroupBox {{ background: {t['panel']}; border: 1px solid {t['border']}; border-radius: 8px; margin-top: 14px;
-                 padding: 12px 10px 10px 10px; font-weight: 600; }}
-    QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 4px; background: transparent; }}
+    QGroupBox {{ background: {t['panel']}; border: 1px solid {t['border']}; border-radius: 8px; margin-top: 26px;
+                 padding: 20px 16px 14px 16px; font-weight: 600; }}
+    QGroupBox::title {{ subcontrol-origin: margin; subcontrol-position: top left; left: 4px; top: 0px;
+                        padding: 0 4px 6px 4px; background: transparent; }}
     QGroupBox QWidget {{ background: transparent; font-weight: normal; }}
     QPushButton {{ background: {t['panel2']}; border: 1px solid {t['border']}; border-radius: 6px; padding: 6px 12px; }}
     QPushButton:hover {{ border-color: {t['accent']}; }}
@@ -42,12 +43,14 @@ def stylesheet(t: dict) -> str:
     QPushButton#Primary {{ background: {t['accent']}; color: {t['accent_text']}; border: none; font-weight: 600; }}
     QPushButton#Danger {{ color: {t['bad']}; }}
     QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit, QTextEdit {{
-        background: {t['input']}; border: 1px solid {t['border']}; border-radius: 5px; padding: 4px 6px; }}
+        background: {t['input']}; border: 1px solid {t['border']}; border-radius: 5px; padding: 5px 8px; }}
     QComboBox QAbstractItemView {{ background: {t['panel']}; selection-background-color: {t['sel']}; }}
     QTableWidget, QTreeWidget, QListWidget {{ background: {t['panel']}; alternate-background-color: {t['panel2']};
         border: 1px solid {t['border']}; border-radius: 6px; gridline-color: {t['border']};
         selection-background-color: {t['sel']}; selection-color: {t['text']}; }}
-    QHeaderView::section {{ background: {t['panel2']}; border: none; border-right: 1px solid {t['border']}; padding: 5px; }}
+    QHeaderView::section {{ background: {t['panel2']}; border: none; border-right: 1px solid {t['border']}; padding: 6px 8px; }}
+    QTableWidget::item {{ padding: 4px 6px; }}
+    QListWidget::item {{ padding: 4px 6px; }}
     QProgressBar {{ background: {t['input']}; border: 1px solid {t['border']}; border-radius: 5px; text-align: center; height: 16px; }}
     QProgressBar::chunk {{ background: {t['accent']}; border-radius: 4px; }}
     QSlider::groove:horizontal {{ height: 4px; background: {t['border']}; border-radius: 2px; }}
@@ -62,7 +65,7 @@ def stylesheet(t: dict) -> str:
     QRadioButton::indicator {{ border-radius: 8px; }}
     QCheckBox::indicator:checked, QRadioButton::indicator:checked {{ background: {t['accent']}; border-color: {t['accent']}; }}
     QCheckBox::indicator:disabled, QRadioButton::indicator:disabled {{ border-color: {t['border']}; }}
-    QToolTip {{ background: {t['panel']}; color: {t['text']}; border: 1px solid {t['border']}; }}
+    QToolTip {{ background: {t['panel']}; color: {t['text']}; border: 1px solid {t['border']}; padding: 6px 8px; }}
     QStatusBar {{ background: {t['panel']}; border-top: 1px solid {t['border']}; }}
     """
 

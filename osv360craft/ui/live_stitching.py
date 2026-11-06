@@ -9,17 +9,18 @@ from __future__ import annotations
 
 import tempfile
 import time
-from collections import OrderedDict, deque
+from collections import deque
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QPushButton,
-                               QScrollArea, QSlider, QSplitter, QVBoxLayout, QWidget)
+                               QScrollArea, QSizePolicy, QSlider, QSplitter, QVBoxLayout, QWidget)
 
 from osv360craft.core import osv_probe
 from osv360craft.hardware import gpu_detector
 from osv360craft.hardware.auto_optimizer import PREVIEW_MODES
+from osv360craft.live import fisheye_calib, realtime_source
 from osv360craft.live.panorama_viewer import SoftwarePanoramaViewer, make_viewer
 from osv360craft.live.preview_engine import PreviewConfig, PreviewEngine
 from osv360craft.ui.widgets import KeyValueGrid
@@ -27,16 +28,18 @@ from osv360craft.utils import process_manager as pm
 from osv360craft.utils.file_manager import find_proxy, human_bytes
 from osv360craft.utils.paths import cache_dir
 
-PREVIEW_LABELS = {"native": "Native", "4k": "4K preview (3840x1920)", "2k": "2K preview (1920x960)",
-                  "performance": "Performance (1280x640)"}
-MAX_DECODED = 90
+PREVIEW_LABELS = {"realtime": "Real-time (camera proxy, quick stitch)", "native": "Native", "4k": "4K preview (3840x1920)",
+                  "2k": "2K preview (1920x960)", "performance": "Performance (1280x640)"}
+REALTIME_EXACT_SIZE = "1920x960"  # size of the exact OpenOSV frame shown when real-time playback pauses
+MAX_DECODED_BYTES = 768 * 1024 ** 2  # decoded frames kept in memory; older ones reload from the disk cache
 
 
 class _Bridge(QObject):
-    frame = Signal(int, object)     # n, QImage
+    frame = Signal(int, object, str)  # n, QImage, path in the frame cache
     status = Signal(str)
     stats = Signal(dict)
     source = Signal(object)         # QImage
+    quick = Signal(int, object)     # n, dual-fisheye QImage (real-time mode, while scrubbing)
 
 
 class LiveStitchingPage:
@@ -45,11 +48,16 @@ class LiveStitchingPage:
         self.engine: PreviewEngine | None = None
         self.clip: osv_probe.ClipInfo | None = None
         self.bridge = _Bridge()
-        self.frames: OrderedDict[int, QImage] = OrderedDict()
+        self.frames: dict[int, QImage] = {}
+        self.paths: dict[int, str] = {}
         self.current = 0
         self.playing = False
         self._shown_times: deque[float] = deque(maxlen=30)
         self._waiting_since: float | None = None
+        self.rt: realtime_source.RealtimeSource | None = None
+        self.rt_plan: realtime_source.SourcePlan | None = None
+        self.fisheye: fisheye_calib.DualFisheye | None = None
+        self._exact_shown = -1
 
         self.widget = QWidget()
         root = QVBoxLayout(self.widget)
@@ -67,7 +75,7 @@ class LiveStitchingPage:
         self.mode = QComboBox()
         for k, v in PREVIEW_LABELS.items():
             self.mode.addItem(v, k)
-        self.mode.currentIndexChanged.connect(self._reconfigure)
+        self.mode.currentIndexChanged.connect(self._mode_chosen)
         bar.addWidget(self.mode)
         self.view_colour = QComboBox()
         self.view_colour.addItem("View in Rec.709 (D-Log M shown graded for viewing)", "709")
@@ -128,7 +136,10 @@ class LiveStitchingPage:
         self.src_img = QLabel("-")
         self.src_img.setAlignment(Qt.AlignCenter)
         self.src_img.setMinimumHeight(120)
-        self.src_img.setMinimumWidth(160)
+        self.src_img.setMinimumWidth(10)
+        # the picture follows the panel's width instead of forcing the panel wider than the window
+        self.src_img.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self._src_image = None
         v2.addWidget(self.src_img)
         rl.addWidget(g2)
         g3 = QGroupBox("Performance")
@@ -139,16 +150,19 @@ class LiveStitchingPage:
         v4 = QVBoxLayout(g4)
         self.view_lbl = QLabel("yaw 0, pitch 0, roll 0, FOV 90")
         v4.addWidget(self.view_lbl)
-        b_head = QPushButton("Use this heading as the initial viewing direction")
-        b_head.setToolTip("Lossless: stored as 360 metadata in exports")
+        b_head = QPushButton("Use as initial heading")
+        b_head.setToolTip("Use this viewing direction as the direction players open on.\n"
+                          "Lossless: stored as 360 metadata in exports (set in Stitching Controls).")
         b_head.clicked.connect(lambda: self.ctx.applyHeading.emit(self.viewer.view.yaw))
         v4.addWidget(b_head)
-        b_frame = QPushButton("Re-stitch this frame with current settings")
+        b_frame = QPushButton("Re-stitch frame")
+        b_frame.setToolTip("Stitch the current frame again with OpenOSV, using the current Stitching Controls")
         b_frame.clicked.connect(lambda: self.seek(self.current, force=True))
         v4.addWidget(b_frame)
         rl.addWidget(g4)
         rl.addStretch(1)
         side = QScrollArea()
+        self.side = side
         side.setWidgetResizable(True)
         side.setFrameShape(QScrollArea.NoFrame)
         side.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -157,6 +171,7 @@ class LiveStitchingPage:
         split.addWidget(side)
         split.setStretchFactor(0, 3)
         split.setStretchFactor(1, 1)
+        split.splitterMoved.connect(lambda *_: self._fit_source())
         root.addWidget(split, 1)
 
         self.timer = QTimer(self.widget)
@@ -168,6 +183,7 @@ class LiveStitchingPage:
         self.bridge.status.connect(self.status.setText)
         self.bridge.stats.connect(self._on_stats)
         self.bridge.source.connect(self._on_source)
+        self.bridge.quick.connect(self._on_quick)
         ctx.exportChanged.connect(self._settings_changed)
         ctx.planChanged.connect(self._apply_plan_default)
         self.widget.setAcceptDrops(True)
@@ -189,7 +205,7 @@ class LiveStitchingPage:
             old.hide()
             old.deleteLater()
             if img is not None:
-                v.set_image(img)
+                v.set_image(img, old.current_fisheye())
         self.viewer = v
         self.viewer_box.addWidget(v, 1)
 
@@ -233,12 +249,31 @@ class LiveStitchingPage:
             self.ctx.clipOpened.emit(ci)
             self.ctx.recompute_plan()
             self._show_info(ci)
+            self._setup_realtime(ci)
             self.slider.setRange(0, max(0, (ci.frame_count or 1) - 1))
             self.slider.setEnabled(True)
             self.frames.clear()
+            self.paths.clear()
             self._reconfigure()
 
         self.ctx.run_task(lambda: osv_probe.probe(tool, Path(path), ffprobe), done)
+
+    def _setup_realtime(self, ci: osv_probe.ClipInfo) -> None:
+        rep = self.ctx.hardware
+        nvdec = bool(rep and rep.nvdec_status()[0] == "available" and "cuda" in rep.ffmpeg.hwaccels)
+        self.rt_plan = realtime_source.choose_source(ci.path, nvdec)
+        self.fisheye = fisheye_calib.from_probe(ci.calibration, ci.stream_h)
+        realtime_ok = self.rt_plan.kind != "osv-cpu" and bool(rep and rep.ffmpeg.ffmpeg)
+        if realtime_ok and not getattr(self, "_user_mode", False):
+            self.mode.blockSignals(True)
+            self.mode.setCurrentIndex(self.mode.findData("realtime"))
+            self.mode.blockSignals(False)
+        self.perf.set("Real-time source", self.rt_plan.description + ("" if self.fisheye.calibrated else
+                                                                        f"; {self.fisheye.note}"))
+
+    @property
+    def realtime(self) -> bool:
+        return self.mode.currentData() == "realtime" and self.rt_plan is not None
 
     def _show_info(self, ci: osv_probe.ClipInfo) -> None:
         self.info.set("File", Path(ci.path).name)
@@ -271,18 +306,26 @@ class LiveStitchingPage:
                 self.mode.blockSignals(False)
                 self._mode_set = True
 
+    def _mode_chosen(self) -> None:
+        self._user_mode = True
+        self._reconfigure()
+
     def _config(self) -> PreviewConfig | None:
         rep, ci = self.ctx.hardware, self.clip
         if not (rep and ci and rep.openosv.found):
             return None
         mode = self.mode.currentData()
-        size = PREVIEW_MODES.get(mode) or ("{}x{}".format(*ci.native_equirect) if ci.native_equirect else "1920x960")
+        if mode == "realtime":
+            size = REALTIME_EXACT_SIZE
+        else:
+            size = PREVIEW_MODES.get(mode) or ("{}x{}".format(*ci.native_equirect) if ci.native_equirect else "1920x960")
         plan = self.ctx.plan
         return PreviewConfig(osvtool=str(rep.openosv.path), source=ci.path, frame_count=ci.frame_count or 1,
                              fps=ci.fps or 30.0, size=size, view_colour=self.view_colour.currentData(),
                              device=plan.device if plan else "auto", export=self.ctx.export,
                              supported=rep.openosv.render_options, cache_dir=cache_dir(),
-                             cache_bytes=plan.cache_bytes if plan else 1024 ** 3, source_colour=ci.color_mode)
+                             cache_bytes=plan.cache_bytes if plan else 1024 ** 3, source_colour=ci.color_mode,
+                             quick_first=mode != "realtime")  # real-time mode shows the proxy frame first
 
     def _reconfigure(self) -> None:
         cfg = self._config()
@@ -291,11 +334,13 @@ class LiveStitchingPage:
         was_playing = self.playing
         self.stop()
         self.frames.clear()
+        self.paths.clear()
         if self.engine is None:
             self.engine = PreviewEngine(cfg, self._engine_frame, self.bridge.status.emit, self.bridge.stats.emit)
         else:
             self.engine.update_config(cfg)
-        self.perf.set("Preview size", cfg.size + " (does not change the export)")
+        self.perf.set("Preview size", ("real-time proxy while playing; exact OpenOSV frame " + cfg.size + " when paused"
+                                       if self.realtime else cfg.size) + " (does not change the export)")
         self.seek(self.current, force=True)
         if was_playing:
             self.toggle_play()
@@ -305,28 +350,55 @@ class LiveStitchingPage:
             self._reconfigure()
 
     # ---- frames ---------------------------------------------------------
-    def _engine_frame(self, n: int, path: Path) -> None:
-        img = QImage(str(path))  # decoded on the engine thread, not the GUI thread
-        if not img.isNull():
-            self.bridge.frame.emit(n, img)
+    @staticmethod
+    def _load(path: str) -> QImage | None:
+        """Decode a frame as 8-bit RGBA (what the screen shows; a third of the 16-bit size)."""
+        img = QImage(path)
+        return None if img.isNull() else img.convertToFormat(QImage.Format_RGBA8888)
 
-    def _on_frame(self, n: int, img: QImage) -> None:
+    def _engine_frame(self, n: int, path: Path) -> None:
+        img = self._load(str(path))  # decoded on the engine thread, not the GUI thread
+        if img is not None:
+            self.bridge.frame.emit(n, img, str(path))
+
+    def _on_frame(self, n: int, img: QImage, path: str) -> None:
+        self.paths[n] = path
         self.frames[n] = img
-        self.frames.move_to_end(n)
-        while len(self.frames) > MAX_DECODED:
-            k, _ = next(iter(self.frames.items()))
-            if k == self.current:
-                break
-            self.frames.popitem(last=False)
+        self._trim()
         if not self.playing and n == self.current:
             self._display(n)
 
-    def _display(self, n: int) -> None:
+    def _trim(self) -> None:
+        """Keep decoded frames within MAX_DECODED_BYTES: frames already shown go first, then
+        those furthest ahead. A dropped frame is reloaded from the frame cache if needed."""
+        def size(im: QImage) -> int:
+            return im.sizeInBytes()
+        total = sum(size(i) for i in self.frames.values())
+        if total <= MAX_DECODED_BYTES:
+            return
+        order = sorted(self.frames, key=lambda k: (k >= self.current, -k if k < self.current else k))
+        for k in order:
+            if total <= MAX_DECODED_BYTES:
+                break
+            if k == self.current:
+                continue
+            total -= size(self.frames.pop(k))
+
+    def _frame(self, n: int) -> QImage | None:
         img = self.frames.get(n)
+        if img is None and n in self.paths and Path(self.paths[n]).exists():
+            img = self._load(self.paths[n])
+            if img is not None:
+                self.frames[n] = img
+        return img
+
+    def _display(self, n: int) -> None:
+        img = self._frame(n)
         if img is None:
             return
         self.viewer.set_image(img)
         self.current = n
+        self._exact_shown = n
         self.slider.blockSignals(True)
         self.slider.setValue(n)
         self.slider.blockSignals(False)
@@ -347,9 +419,12 @@ class LiveStitchingPage:
         self.current = n
         if self.playing:
             self.stop()
-        if n in self.frames and not force:
+        self._exact_shown = -1
+        if not force and self._frame(n) is not None:
             self._display(n)
         else:
+            if self.realtime:
+                self._request_quick(n)
             self.engine.request_frame(n)
         self._request_source(n)
 
@@ -362,29 +437,87 @@ class LiveStitchingPage:
         self.playing = True
         self.b_play.setText("Pause")
         self._shown_times.clear()
-        self.engine.play_from(self.current)
+        if self.realtime:
+            rep = self.ctx.hardware
+            self.engine.cancel()
+            self.rt = realtime_source.RealtimeSource(rep.ffmpeg.ffmpeg, self.rt_plan, self.clip.fps or 30.0)
+            self.rt.start(self.current)
+            self.status.setText("Real-time preview from " + self.rt_plan.description +
+                                ". Quick stitch while playing; pause for OpenOSV's exact stitch.")
+        else:
+            self.engine.play_from(self.current)
         self.timer.start(max(1, int(1000 / (self.clip.fps or 30))))
 
-    def stop(self) -> None:
+    def stop(self, exact: bool = True) -> None:
         if self.playing:
             self.playing = False
             self.b_play.setText("Play")
             self.timer.stop()
             if self.engine:
                 self.engine.cancel()
+            if self.rt is not None:
+                self.rt.stop()
+                self.rt = None
+                if exact and self.engine:
+                    self._exact_shown = -1
+                    self.engine.request_frame(self.current)  # replace the quick frame with OpenOSV's stitch
         self.perf.set("Playback", "paused")
 
     def _tick(self) -> None:
+        if self.rt is not None:
+            self._tick_realtime()
+            return
         nxt = self.current + 1
         if self.clip and nxt >= (self.clip.frame_count or 1):
             self.stop()
             return
-        if nxt in self.frames:
+        if nxt in self.frames or (nxt in self.paths and self._frame(nxt) is not None):
             self._display(nxt)
             self._waiting_since = None
         else:
             self._waiting_since = self._waiting_since or time.perf_counter()
             self.perf.set("Playback", "waiting for the stitcher (rendering slower than real time)", "warn")
+
+    def _tick_realtime(self) -> None:
+        item = self.rt.get()
+        if item is None:
+            if self.rt.ended:
+                if self.rt.error:
+                    self.status.setText("Real-time preview stopped: " + self.rt.error)
+                self.stop()
+            elif self.rt.error:
+                self.status.setText("Real-time preview: " + self.rt.error)
+            return
+        n, img = item
+        self.viewer.set_image(img, self.fisheye)
+        self.current = n
+        self.slider.blockSignals(True)
+        self.slider.setValue(n)
+        self.slider.blockSignals(False)
+        fps = self.clip.fps or 30
+        self.pos.setText(f"{n} / {(self.clip.frame_count or 1) - 1}  ({n / fps:.2f} s)")
+        self._shown_times.append(time.perf_counter())
+        if len(self._shown_times) > 2:
+            span = self._shown_times[-1] - self._shown_times[0]
+            if span > 0:
+                self.perf.set("Playback", f"{(len(self._shown_times) - 1) / span:.1f} fps real-time "
+                              f"(source {self.clip.fps_label})", "ok")
+        if n >= (self.clip.frame_count or 1) - 1:
+            self.stop()
+
+    def _request_quick(self, n: int) -> None:
+        """Real-time mode while scrubbing: the proxy frame at N straight away."""
+        rep = self.ctx.hardware
+        if not (rep and rep.ffmpeg.ffmpeg and self.rt_plan):
+            return
+        ff, plan, fps = rep.ffmpeg.ffmpeg, self.rt_plan, self.clip.fps or 30.0
+        self.ctx.run_task(lambda: realtime_source.grab_frame(ff, plan, n, fps), lambda img: self.bridge.quick.emit(n, img))
+
+    def _on_quick(self, n: int, img) -> None:
+        # only if the exact OpenOSV frame for this position has not arrived already
+        if img is not None and not img.isNull() and n == self.current and self._exact_shown != n and not self.playing:
+            self.viewer.set_image(img, self.fisheye)
+            self.pos.setText(f"{n} / {(self.clip.frame_count or 1) - 1}  ({n / (self.clip.fps or 30):.2f} s)")
 
     # ---- side panels ----------------------------------------------------
     def _on_stats(self, d: dict) -> None:
@@ -434,13 +567,19 @@ class LiveStitchingPage:
 
     def _on_source(self, img) -> None:
         if img is not None and not img.isNull():
-            width = max(160, min(420, self.src_img.width() - 4))
-            self.src_img.setPixmap(QPixmap.fromImage(img).scaledToWidth(width, Qt.SmoothTransformation))
+            self._src_image = img
+            self._fit_source()
+
+    def _fit_source(self) -> None:
+        if self._src_image is None:
+            return
+        width = max(120, self.side.viewport().width() - 64)  # group box margins and padding
+        self.src_img.setPixmap(QPixmap.fromImage(self._src_image).scaledToWidth(width, Qt.SmoothTransformation))
 
     def _view_changed(self, yaw: float, pitch: float, roll: float, fov: float) -> None:
         self.view_lbl.setText(f"yaw {yaw:.1f}, pitch {pitch:.1f}, roll {roll:.1f}, FOV {fov:.0f}")
 
     def shutdown(self) -> None:
-        self.stop()
+        self.stop(exact=False)
         if self.engine:
             self.engine.cancel()

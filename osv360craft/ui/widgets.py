@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout, QHBoxLayout, QLabel,
-                               QLineEdit, QPushButton, QScrollArea, QVBoxLayout, QWidget)
+                               QLineEdit, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
 
 
 def page(title: str, subtitle: str = "") -> tuple[QWidget, QVBoxLayout]:
@@ -24,7 +24,8 @@ def page(title: str, subtitle: str = "") -> tuple[QWidget, QVBoxLayout]:
     sa.setWidgetResizable(True)
     inner = QWidget()
     lay = QVBoxLayout(inner)
-    lay.setContentsMargins(0, 0, 6, 0)
+    lay.setContentsMargins(0, 0, 10, 8)
+    lay.setSpacing(10)
     sa.setWidget(inner)
     ol.addWidget(sa, 1)
     return outer, lay
@@ -34,7 +35,9 @@ class KeyValueGrid(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.grid = QGridLayout(self)
-        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setContentsMargins(0, 2, 0, 0)
+        self.grid.setHorizontalSpacing(18)
+        self.grid.setVerticalSpacing(7)
         self.grid.setColumnStretch(1, 1)
         self._labels: dict[str, QLabel] = {}
 
@@ -45,7 +48,8 @@ class KeyValueGrid(QWidget):
             k.setObjectName("Muted")
             v = QLabel()
             v.setWordWrap(True)
-            v.setMinimumWidth(120)
+            v.setMinimumWidth(60)
+            v.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
             v.setTextInteractionFlags(Qt.TextSelectableByMouse)
             self.grid.addWidget(k, r, 0, Qt.AlignTop)
             self.grid.addWidget(v, r, 1)

@@ -132,12 +132,16 @@ Output layout:
 
 ## Live preview: what to expect
 
-OpenOSV has no public frame-by-frame API: its C ABI is private to its Premiere plug-ins. Live Stitching therefore drives OpenOSV directly:
+Live Stitching has two kinds of preview. The preview never changes the export.
 
-- A **paused** frame is stitched exactly.
-- During **playback**, OpenOSV's own playback mode renders short segments ahead of the play head, and frames appear as fast as your PC stitches them.
+- **Real-time (camera proxy, quick stitch).** This is the default when it is possible.
+  - **Source:** the Osmo 360 records a small `.LRF` proxy (2048 × 1024, both lenses) beside every `.OSV`. OSV360Craft plays that proxy in real time. If only the `.OSV` was copied, it decodes the `.OSV`'s two lenses on the GPU (NVDEC) and scales them down on the fly.
+  - **Stitching:** the graphics card projects the lenses onto the sphere with OpenOSV's own lens calibration, read from the clip.
+  - **Nothing is written to disk:** no proxy is created and nothing is cached.
+  - **What is skipped:** this is a quick stitch, without OpenOSV's seam carving, sky correction or colour conversion.
+- **Exact OpenOSV stitch.** When you pause or scrub, the quick frame is replaced by OpenOSV's full stitch of that frame, which takes a few seconds at 8K. The 2K, 4K, Native and Performance modes also play OpenOSV's exact stitch, but each burst of frames is a separate OpenOSV run, so they are slow at 8K.
 
-The panel shows the real speeds. Real-time 8K playback is not possible on most computers, so use the 2K or Performance preview for smooth playback. See [docs/INTEGRATION_REPORT.md](docs/INTEGRATION_REPORT.md).
+**What it would take for the full stitch in real time.** OpenOSV has no public frame-by-frame interface; its C ABI is private to its Premiere plug-ins. Real-time full-quality stitching would need a companion program built against OpenOSV's libraries. See [docs/INTEGRATION_REPORT.md](docs/INTEGRATION_REPORT.md).
 
 ## Privacy
 

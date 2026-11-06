@@ -25,7 +25,7 @@ def test_gl_viewer_draws_equirect(tmp_path):
 
     from osv360craft.live.panorama_viewer import GLPanoramaViewer, gl_available, make_viewer
 
-    app = QApplication.instance() or QApplication([])
+    QApplication.instance() or QApplication([])
     if not gl_available():
         pytest.skip("no OpenGL context available")
     png = tmp_path / "eq.png"
@@ -45,4 +45,40 @@ def test_gl_viewer_draws_equirect(tmp_path):
     colours = {fb.pixelColor(x, y).name() for x in range(0, 640, 29) for y in range(0, 360, 29)}
     assert not failures and v.gl_ok, failures
     assert len(colours) > 5, "the viewer drew nothing"
+    v.close()
+
+
+@pytest.mark.parametrize("yaw,pitch", [(0, 0), (-90, 0), (90, 0), (-150, 10), (150, -10), (0, 60), (30, -60),
+                                        (-90, 35)])
+def test_dual_fisheye_projection_points_the_right_way(yaw, pitch):
+    """The proxy preview: a synthetic camera frame (KB5 lenses, one turned 1 degree) whose colours
+    encode the direction each pixel sees; the viewer centre must show the direction it looks at,
+    on either lens and across the seams."""
+    np = pytest.importorskip("numpy")
+    from PySide6.QtCore import QEventLoop, QTimer
+    from PySide6.QtGui import QImage
+    from PySide6.QtWidgets import QApplication
+
+    from fisheye_synth import calibration, expected_colour, render
+    from osv360craft.live import fisheye_calib as fc
+    from osv360craft.live.panorama_viewer import gl_available, make_viewer
+
+    QApplication.instance() or QApplication([])
+    if not gl_available():
+        pytest.skip("no OpenGL context available")
+    fe = fc.from_probe(calibration(), 3840)
+    arr = np.ascontiguousarray(render(fe))
+    img = QImage(arr.data, arr.shape[1], arr.shape[0], arr.shape[1] * 4, QImage.Format_RGBA8888).copy()
+    v = make_viewer()
+    v.resize(200, 200)
+    v.show()
+    v.set_image(img, fe)
+    v.view.yaw, v.view.pitch, v.view.fov = float(yaw), float(pitch), 20.0
+    v.update()
+    loop = QEventLoop()
+    QTimer.singleShot(500, loop.quit)
+    loop.exec()
+    c = v.grabFramebuffer().pixelColor(100, 100)
+    er, eg = expected_colour(yaw, pitch)
+    assert abs(c.red() - er) <= 4 and abs(c.green() - eg) <= 4, (c.red(), c.green(), er, eg)
     v.close()
