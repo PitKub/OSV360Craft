@@ -1,5 +1,5 @@
 @echo off
-rem Builds OSV360Craft for Windows: the EXE, the release ZIP and the installer.
+rem Builds OSV360Craft for Windows: the program folder, the portable ZIP and the installer.
 rem Needs: Python 3.12+ (64-bit), internet access for the first run, and for the
 rem installer Inno Setup 6 (winget install --id JRSoftware.InnoSetup -e).
 setlocal
@@ -8,23 +8,37 @@ cd /d "%~dp0"
 python -m pip install -r requirements.txt
 if errorlevel 1 goto :failed
 
-for /f "delims=" %%S in ('python -c "import sysconfig; print(sysconfig.get_path('scripts'))"') do set "PY_SCRIPTS=%%S"
-if not exist "%PY_SCRIPTS%\pyside6-deploy.exe" goto :missing_deploy
+for /f "delims=" %%V in ('python -c "import osv360craft; print(osv360craft.__version__)"') do set "APP_VERSION=%%V"
+set "APP=dist\OSV360Craft"
 
-if not exist "dist" mkdir "dist"
+rem Compile with Nuitka as a normal program folder (standalone), NOT a single
+rem self-extracting EXE: a onefile build unpacks its code into %%TEMP%% on every
+rem start, which antivirus machine-learning heuristics flag (for example
+rem Microsoft Defender "Trojan:Win32/Bearfoos.A!ml" on the unpacked launcher.dll).
+if exist "build\nuitka" rmdir /S /Q "build\nuitka"
+python -m nuitka --mode=standalone --enable-plugins=pyside6 --noinclude-qt-translations ^
+    --include-package=osv360craft --include-package=psutil ^
+    --include-data-dir=assets=assets --include-data-dir=config=config ^
+    --output-dir=build\nuitka --output-folder-name=OSV360Craft --output-filename=OSV360Craft.exe ^
+    --zig --assume-yes-for-downloads --windows-console-mode=disable ^
+    --windows-icon-from-ico=assets\OSV360Craft.ico --windows-company-name=PitKub ^
+    --windows-product-name=OSV360Craft --windows-file-description=OSV360Craft ^
+    --windows-product-version=%APP_VERSION%.0 --windows-file-version=%APP_VERSION%.0 ^
+    launcher.py
 if errorlevel 1 goto :failed
+rem Nuitka adds ".dist" to --output-folder-name.
+if not exist "build\nuitka\OSV360Craft.dist\OSV360Craft.exe" goto :missing_exe
 
-"%PY_SCRIPTS%\pyside6-deploy.exe" -c pysidedeploy.spec --force --nuitka-version 4.3.4
-if errorlevel 1 goto :failed
-if not exist "dist\OSV360Craft.exe" goto :missing_exe
+if exist "dist" rmdir /S /Q "dist"
+mkdir "dist" || goto :failed
+move "build\nuitka\OSV360Craft.dist" "%APP%" >nul || goto :failed
 
-if exist "dist\assets" rmdir /S /Q "dist\assets"
-copy /Y "README.md" "dist\README.md" >nul || goto :failed
-copy /Y "LICENSE" "dist\LICENSE.txt" >nul || goto :failed
-copy /Y "THIRD_PARTY_NOTICES.md" "dist\THIRD_PARTY_NOTICES.md" >nul || goto :failed
-copy /Y "docs\USER_GUIDE.md" "dist\USER_GUIDE.md" >nul || goto :failed
-if not exist "dist\licenses" mkdir "dist\licenses"
-copy /Y "licenses\*.txt" "dist\licenses\" >nul || goto :failed
+copy /Y "README.md" "%APP%\README.md" >nul || goto :failed
+copy /Y "LICENSE" "%APP%\LICENSE.txt" >nul || goto :failed
+copy /Y "THIRD_PARTY_NOTICES.md" "%APP%\THIRD_PARTY_NOTICES.md" >nul || goto :failed
+copy /Y "docs\USER_GUIDE.md" "%APP%\USER_GUIDE.md" >nul || goto :failed
+if not exist "%APP%\licenses" mkdir "%APP%\licenses"
+copy /Y "licenses\*.txt" "%APP%\licenses\" >nul || goto :failed
 
 rem Bundled engine and encoder, pinned and checksum-verified by the scripts.
 if not exist "vendor\OpenOSV\cli\osvtool.exe" (
@@ -35,13 +49,11 @@ if not exist "vendor\ffmpeg\ffmpeg.exe" (
     powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\get_ffmpeg.ps1"
     if errorlevel 1 goto :failed
 )
-if exist "dist\external" rmdir /S /Q "dist\external"
-xcopy /E /I /Y /Q "vendor\OpenOSV" "dist\external\OpenOSV" >nul || goto :failed
-xcopy /E /I /Y /Q "vendor\ffmpeg" "dist\external\ffmpeg" >nul || goto :failed
+xcopy /E /I /Y /Q "vendor\OpenOSV" "%APP%\external\OpenOSV" >nul || goto :failed
+xcopy /E /I /Y /Q "vendor\ffmpeg" "%APP%\external\ffmpeg" >nul || goto :failed
 
-for /f "delims=" %%V in ('python -c "import osv360craft; print(osv360craft.__version__)"') do set "APP_VERSION=%%V"
 set "ZIP_NAME=OSV360Craft-%APP_VERSION%-Windows-portable.zip"
-powershell -NoProfile -Command "Compress-Archive -Force -Path 'dist\OSV360Craft.exe','dist\README.md','dist\USER_GUIDE.md','dist\LICENSE.txt','dist\THIRD_PARTY_NOTICES.md','dist\licenses','dist\external' -DestinationPath 'dist\%ZIP_NAME%'"
+powershell -NoProfile -Command "Compress-Archive -Force -Path '%APP%' -DestinationPath 'dist\%ZIP_NAME%'"
 if errorlevel 1 goto :failed
 
 set "ISCC="
@@ -60,20 +72,15 @@ if defined ISCC (
 
 echo.
 echo Build complete.
-echo EXE:       dist\OSV360Craft.exe  (finds dist\external\OpenOSV and dist\external\ffmpeg next to it)
+echo App:       %APP%\OSV360Craft.exe  (with its DLLs, and external\OpenOSV and external\ffmpeg beside it)
 if defined SETUP_NAME echo Installer: dist\%SETUP_NAME%
 echo ZIP:       dist\%ZIP_NAME%
 echo FFmpeg source to attach to the release: vendor\release-sources\
 pause
 exit /b 0
 
-:missing_deploy
-echo Could not find pyside6-deploy.exe in the Python Scripts folder.
-echo Check that Python was installed correctly, then run build.bat again.
-goto :failed
-
 :missing_exe
-echo The build finished without creating dist\OSV360Craft.exe.
+echo The build finished without creating build\nuitka\OSV360Craft.dist\OSV360Craft.exe.
 goto :failed
 
 :failed

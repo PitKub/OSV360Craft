@@ -63,6 +63,7 @@ A quality you choose yourself in Export Settings always wins. If a GPU renderer 
 
 - **osvtool could not start**: install the Visual C++ Redistributable from [aka.ms/vs/17/release/vc_redist.x64.exe](https://aka.ms/vs/17/release/vc_redist.x64.exe).
 - **An encoder shows "failed test"**: the GPU or driver cannot run it; another one is used. Update the GPU driver.
+- **An antivirus warning** (for example a name ending in `!ml`): machine-learning checks sometimes flag new, unsigned apps. Make sure you downloaded OSV360Craft from its GitHub Releases page, check the file on [virustotal.com](https://www.virustotal.com), and report a false detection to Microsoft at [microsoft.com/wdsi/filesubmission](https://www.microsoft.com/en-us/wdsi/filesubmission). Never turn your antivirus off to run an app; on a work computer, ask your IT or security team first.
 - **Not enough free space**: an 8K render can need tens of GB, more while D-Log M chunks are encoded.
 - **Reporting a problem**: Logs and Diagnostics > *Save diagnostic bundle* (no media is included) and open an issue at [https://github.com/PitKub/OSV360Craft/issues](https://github.com/PitKub/OSV360Craft/issues).
 

@@ -18,15 +18,23 @@ build.bat
 `build.bat` does the following:
 
 1. Installs the pinned tools from `requirements.txt`: PySide6 6.12.0, psutil, Nuitka 4.3.4 and ziglang.
-2. Compiles `dist\OSV360Craft.exe` as one file with `pyside6-deploy -c pysidedeploy.spec`. Nuitka uses the zig toolchain, so Visual Studio is not needed.
+2. Compiles `dist\OSV360Craft\` with `python -m nuitka --mode=standalone ...`: a normal program folder with `OSV360Craft.exe` and its DLLs. Nuitka uses the zig toolchain, so Visual Studio is not needed.
+   - **Why not a single EXE:** a onefile build unpacks its code into `%TEMP%` at every start. Microsoft Defender's machine-learning check flagged that unpacked `launcher.dll` as `Trojan:Win32/Bearfoos.A!ml`. A standalone folder unpacks nothing.
 3. Runs `scripts\get_openosv.ps1`, which downloads OpenOSV 0.6.4's Windows release and checks its SHA-256. It copies `osvtool.exe`, its DLLs and OpenOSV's licences to `vendor\OpenOSV`.
 4. Runs `scripts\get_ffmpeg.ps1`, which downloads the pinned BtbN FFmpeg build and checks its SHA-256 (the same build ProxyCraft uses). It copies the build to `vendor\ffmpeg`, and the matching source archives to `vendor\release-sources`.
-5. Copies both folders to `dist\external\` and makes `OSV360Craft-<version>-Windows-portable.zip`.
+5. Copies both folders to `dist\OSV360Craft\external\` and zips the program folder as `OSV360Craft-<version>-Windows-portable.zip`.
 6. Compiles `installer\OSV360Craft.iss` to `OSV360Craft-<version>-Setup.exe` when Inno Setup is found.
+
+## Code signing (recommended)
+
+Unsigned new apps are more likely to trigger SmartScreen and antivirus machine-learning checks. Open-source projects can get free code signing from [SignPath Foundation](https://signpath.org). Sign these files before attaching them to a release:
+
+- `dist\OSV360Craft\OSV360Craft.exe`;
+- the installer.
 
 ## Releasing
 
-1. Update `osv360craft/__init__.py` (`__version__`), the version in `pysidedeploy.spec` and `CHANGELOG.md`.
+1. Update `osv360craft/__init__.py` (`__version__`) and `CHANGELOG.md`. `build.bat` reads the version from the package.
 2. Run the tests, then run `build.bat` on Windows.
 3. Create a GitHub release and attach:
    - `dist\OSV360Craft-<version>-Setup.exe`;

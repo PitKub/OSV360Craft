@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- **No more antivirus false alarms from the build itself.**
+  - **The problem:** the app was built as a single self-extracting EXE that unpacked its code into `%TEMP%` at every start. Microsoft Defender's machine-learning check flagged the unpacked `launcher.dll` (`Trojan:Win32/Bearfoos.A!ml`).
+  - **The fix:** OSV360Craft is now a normal program folder (Nuitka standalone), and the installer installs that folder.
+- **No PowerShell.** GPU detection now uses Windows display-device and registry information, and drive detection (SSD/HDD, bus) uses a direct Windows storage query. No hidden PowerShell process is started.
+- **Faster start.** Encoder test results are remembered until FFmpeg changes; **Detect again** in Hardware Analyzer tests every encoder again.
+- **Recordings on network drives.** Paths such as `//NAS/share/...` are passed to OpenOSV in Windows form. OpenOSV's command-line parser took them for options and stopped with "file is required".
+- **Benchmark.**
+  - Each hardware decoder is tested separately, and its figures are real GPU figures.
+  - 8K encode figures no longer include drawing the test pattern.
+  - A command-line error is reported once, not blamed on every GPU.
+  - Short clips work.
+
 ## 1.0.0 — first public release
 
 - **Live Stitching.** Opens original DJI Osmo 360 `.OSV` files without exporting. Every frame shown is a real OpenOSV stitch.

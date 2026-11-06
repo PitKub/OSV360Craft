@@ -1,6 +1,7 @@
 """Unit tests: parsers, command building, settings, files, metadata, optimizer."""
 
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -252,3 +253,36 @@ def test_windows_paths_reach_tools_in_native_form():
     assert out[6] == r"C:\Temp\s.mp4" and out[8] == r"C:\ffmpeg\bin\ffmpeg.exe"
     assert out[3:5] == ["--range", "0-59"] and out[9:] == args[9:]  # options and filters untouched
     assert native_args(args, platform="linux") == args
+
+
+def test_no_powershell_or_shell_launches():
+    """Antivirus heuristics treat hidden PowerShell as suspicious: the app must never start it."""
+    import re as _re
+    src = Path(__file__).parents[1] / "osv360craft"
+    for f in src.rglob("*.py"):
+        code = "\n".join(l for l in f.read_text(encoding="utf-8").splitlines() if not l.lstrip().startswith("#"))
+        assert not _re.search(r"[\"'](powershell|pwsh)(\.exe)?[\"']", code, _re.I), f
+        assert "shell=True" not in code, f
+
+
+def test_encoder_results_are_cached_per_ffmpeg(tmp_path):
+    import shutil as _sh
+    ff = _sh.which("ffmpeg")
+    if not ff:
+        pytest.skip("ffmpeg not available")
+    first = codec_detector.detect(ff)
+    assert first.tests and codec_detector._cache_path().exists()
+    again = codec_detector.detect(ff)  # reused, no test encodes
+    assert {k: v.verified for k, v in again.tests.items()} == {k: v.verified for k, v in first.tests.items()}
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows detectors")
+def test_windows_detectors_run_without_other_programs():
+    from osv360craft.hardware import cpu_detector, ram_detector, storage_detector
+    c = cpu_detector.detect()
+    assert c.model != "unknown" and c.logical_processors
+    assert ram_detector.detect().total_bytes
+    gpus = gpu_detector.detect()  # a CI VM has at least the Microsoft Basic Display Adapter
+    assert gpus and all(g.name for g in gpus)
+    d = storage_detector.detect("C:\\")
+    assert d.free_bytes and d.media_type in ("SSD", "HDD", "unknown")

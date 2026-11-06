@@ -11,7 +11,6 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from osv360craft.utils import process_manager as pm
 from osv360craft.utils.logging import get_logger
 
 log = get_logger(__name__)
@@ -40,25 +39,52 @@ def drive_root(path: str | Path) -> str:
     return str(p.anchor)
 
 
+IOCTL_STORAGE_QUERY_PROPERTY = 0x002D1400
+BUS_TYPES = {7: "USB", 8: "RAID", 10: "SAS", 11: "SATA", 12: "SD", 14: "Virtual", 16: "Storage Spaces", 17: "NVMe"}
+
+
 def _windows_media_type(root: str) -> tuple[str, str]:
+    """SSD/HDD and bus type with IOCTL_STORAGE_QUERY_PROPERTY on the volume.
+
+    'Seek penalty' is how Windows itself tells a spinning disk from an SSD.
+    Opening a volume with no access rights needs no administrator rights and
+    no other program is started."""
+    import ctypes
+    from ctypes import wintypes
+
+    if root.startswith("\\\\"):
+        return "network", "network share"
     letter = root[:1]
     if not letter.isalpha():
         return "unknown", ""
-    data = pm.powershell_json(
-        f"$d = Get-Partition -DriveLetter {letter} -ErrorAction Stop | Get-Disk | Get-PhysicalDisk; "
-        "$d | Select-Object MediaType,BusType | ConvertTo-Json -Compress", timeout=20)
-    if isinstance(data, list):
-        data = data[0] if data else None
-    if not isinstance(data, dict):
+    k32 = ctypes.windll.kernel32
+    k32.CreateFileW.restype = wintypes.HANDLE
+    h = k32.CreateFileW(f"\\\\.\\{letter}:", 0, 3, None, 3, 0, None)  # FILE_SHARE_READ|WRITE, OPEN_EXISTING
+    if h in (None, wintypes.HANDLE(-1).value):
         return "unknown", ""
-    mt = str(data.get("MediaType", ""))
-    bus = str(data.get("BusType", ""))
-    mapping = {"3": "HDD", "4": "SSD", "HDD": "HDD", "SSD": "SSD"}
-    media = mapping.get(mt, "unknown")
-    if media == "unknown" and bus in ("17", "NVMe"):
-        media = "SSD"
-    bus_names = {"17": "NVMe", "11": "SATA", "7": "USB", "8": "RAID"}
-    return media, bus_names.get(bus, bus)
+
+    def query(prop: int, size: int) -> bytes | None:
+        q = (ctypes.c_uint32 * 3)(prop, 0, 0)  # PropertyId, PropertyStandardQuery, AdditionalParameters
+        buf = ctypes.create_string_buffer(size)
+        got = wintypes.DWORD()
+        ok = k32.DeviceIoControl(h, IOCTL_STORAGE_QUERY_PROPERTY, ctypes.byref(q), ctypes.sizeof(q), buf, size,
+                                 ctypes.byref(got), None)
+        return buf.raw[:got.value] if ok else None
+
+    try:
+        media, bus = "unknown", ""
+        seek = query(7, 12)  # StorageDeviceSeekPenaltyProperty -> DEVICE_SEEK_PENALTY_DESCRIPTOR
+        if seek and len(seek) >= 9:
+            media = "HDD" if seek[8] else "SSD"
+        dev = query(0, 1024)  # StorageDeviceProperty -> STORAGE_DEVICE_DESCRIPTOR (BusType at offset 28)
+        if dev and len(dev) >= 32:
+            code = int.from_bytes(dev[28:32], "little")
+            bus = BUS_TYPES.get(code, f"type {code}")
+            if bus == "NVMe" and media == "unknown":
+                media = "SSD"
+        return media, bus
+    finally:
+        k32.CloseHandle(h)
 
 
 def detect(path: str | Path, media_type: bool = True) -> DriveInfo:
@@ -70,7 +96,10 @@ def detect(path: str | Path, media_type: bool = True) -> DriveInfo:
     except OSError as e:
         d.note = f"disk usage unavailable: {e}"
     if media_type and sys.platform == "win32":
-        d.media_type, d.bus_type = _windows_media_type(root)
+        try:
+            d.media_type, d.bus_type = _windows_media_type(root)
+        except (OSError, AttributeError, ValueError) as e:
+            d.note = f"drive type unavailable: {e}"
     return d
 
 

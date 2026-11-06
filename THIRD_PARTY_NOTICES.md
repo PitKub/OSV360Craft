@@ -1,6 +1,6 @@
 # Third-party notices
 
-OSV360Craft's own code is released under the MIT License (see `LICENSE`). The Windows EXE, the installer and the portable ZIP also contain, or work with, the third-party software below. Their licences are separate from OSV360Craft's.
+OSV360Craft's own code is released under the MIT License (see `LICENSE`). The program folder, the installer and the portable ZIP also contain, or work with, the third-party software below. Their licences are separate from OSV360Craft's.
 
 ## OpenOSV (included in the installer and portable ZIP, folder `external\OpenOSV`)
 
@@ -16,25 +16,25 @@ The stitching, decoding and colour engine is **OpenOSV 0.6.4**, `osvtool.exe` fr
 - OSV360Craft does not modify OpenOSV. It runs `osvtool.exe` as a separate program.
 - OpenOSV is an independent project, not affiliated with DJI. Its NOTICE states that it contains no DJI code, binaries, models, LUTs or artwork.
 
-## Qt and PySide6 (bundled in OSV360Craft.exe)
+## Qt and PySide6 (included in the OSV360Craft program folder)
 
 OSV360Craft uses **Qt for Python (PySide6) 6.12.0** and the **Qt 6** libraries it includes, © The Qt Company Ltd. and other contributors.
 
 - Licence: GNU Lesser General Public License v3 (LGPL-3.0). The full texts are in `licenses/LGPL-3.0.txt` and `licenses/GPL-3.0.txt`.
 - Source code: PySide6 at <https://code.qt.io/cgit/pyside/pyside-setup.git/> and Qt at <https://download.qt.io/official_releases/qt/>.
-- OSV360Craft does not modify Qt or PySide6. Its own source is public, so you can rebuild the EXE with any compatible PySide6 version (see `docs/BUILDING.md`).
+- OSV360Craft does not modify Qt or PySide6. Its own source is public, so you can rebuild the app with any compatible PySide6 version (see `docs/BUILDING.md`).
 
-## psutil (bundled in OSV360Craft.exe)
+## psutil (included in the OSV360Craft program folder)
 
 **psutil**, © Giampaolo Rodola, BSD 3-Clause License: <https://github.com/giampaolo/psutil/blob/master/LICENSE>.
 
-## Python (bundled in OSV360Craft.exe)
+## Python (included in the OSV360Craft program folder)
 
-The EXE contains the **Python** runtime and standard library, © Python Software Foundation, licensed under the Python Software Foundation License: <https://docs.python.org/3/license.html>.
+The program folder contains the **Python** runtime and standard library, © Python Software Foundation, licensed under the Python Software Foundation License: <https://docs.python.org/3/license.html>.
 
 ## Nuitka (build tool)
 
-The EXE is compiled with **Nuitka 4.3.4**: <https://nuitka.net>. See Nuitka's own documentation for the terms that apply to programs it compiles.
+The app is compiled with **Nuitka 4.3.4** (standalone mode): <https://nuitka.net>. See Nuitka's own documentation for the terms that apply to programs it compiles.
 
 ## FFmpeg and FFprobe (included in the installer and portable ZIP, folder `external\ffmpeg`)
 

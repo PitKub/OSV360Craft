@@ -63,14 +63,11 @@ Name: "ffmpeg"; Description: "FFmpeg video encoder and ffprobe (GPL-3.0)"; Types
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "..\dist\OSV360Craft.exe"; DestDir: "{app}"; Components: app; Flags: ignoreversion
-Source: "..\dist\README.md"; DestDir: "{app}"; Components: app; Flags: ignoreversion
-Source: "..\dist\USER_GUIDE.md"; DestDir: "{app}"; Components: app; Flags: ignoreversion
-Source: "..\dist\LICENSE.txt"; DestDir: "{app}"; Components: app; Flags: ignoreversion
-Source: "..\dist\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Components: app; Flags: ignoreversion
-Source: "..\dist\licenses\*"; DestDir: "{app}\licenses"; Components: app; Flags: ignoreversion
-Source: "..\dist\external\OpenOSV\*"; DestDir: "{app}\external\OpenOSV"; Components: openosv; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\dist\external\ffmpeg\*"; DestDir: "{app}\external\ffmpeg"; Components: ffmpeg; Flags: ignoreversion recursesubdirs createallsubdirs
+; dist\OSV360Craft is a normal program folder (Nuitka standalone): OSV360Craft.exe with its DLLs.
+; Nothing is unpacked to %TEMP% when the app starts.
+Source: "..\dist\OSV360Craft\*"; DestDir: "{app}"; Components: app; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "\external"
+Source: "..\dist\OSV360Craft\external\OpenOSV\*"; DestDir: "{app}\external\OpenOSV"; Components: openosv; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\OSV360Craft\external\ffmpeg\*"; DestDir: "{app}\external\ffmpeg"; Components: ffmpeg; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\OSV360Craft"; Filename: "{app}\OSV360Craft.exe"

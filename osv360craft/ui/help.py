@@ -101,6 +101,11 @@ quality are never changed silently.</p>
 <li><b>osvtool could not start</b>: install the Visual C++ Redistributable from
 <a href="https://aka.ms/vs/17/release/vc_redist.x64.exe">aka.ms/vs/17/release/vc_redist.x64.exe</a>.</li>
 <li><b>An encoder shows "failed test"</b>: the GPU or driver cannot run it; another one is used. Update the GPU driver.</li>
+<li><b>An antivirus warning</b> (for example a name ending in <code>!ml</code>): machine-learning checks sometimes flag
+new, unsigned apps. Make sure you downloaded OSV360Craft from its GitHub Releases page, check the file on
+<a href="https://www.virustotal.com">virustotal.com</a>, and report a false detection to Microsoft at
+<a href="https://www.microsoft.com/en-us/wdsi/filesubmission">microsoft.com/wdsi/filesubmission</a>. Never turn
+your antivirus off to run an app; on a work computer, ask your IT or security team first.</li>
 <li><b>Not enough free space</b>: an 8K render can need tens of GB, more while D-Log M chunks are encoded.</li>
 <li><b>Reporting a problem</b>: Logs and Diagnostics &gt; <i>Save diagnostic bundle</i> (no media is included) and
 open an issue at <a href="{REPO_URL}/issues">{REPO_URL}/issues</a>.</li>

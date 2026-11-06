@@ -168,7 +168,39 @@ def test_encoder(ffmpeg: str, codec: str, ten_bit: bool = True, size: str = "128
     return t
 
 
-def detect(configured_ffmpeg: str | None = None, run_tests: bool = True) -> FfmpegInfo:
+def _cache_path() -> Path:
+    from osv360craft.utils.paths import user_data_dir
+    return user_data_dir() / "encoder_tests.json"
+
+
+def _ffmpeg_key(ff: str) -> str:
+    st = Path(ff).stat()
+    return f"{Path(ff).resolve()}|{st.st_size}|{int(st.st_mtime)}"
+
+
+def _load_cached_tests(ff: str) -> dict[str, EncoderTest] | None:
+    """Encoder results from an earlier start, valid while the same ffmpeg file is used
+    (the test encodes run once, not at every start)."""
+    import json
+    try:
+        d = json.loads(_cache_path().read_text(encoding="utf-8"))
+        if d.get("key") != _ffmpeg_key(ff):
+            return None
+        return {k: EncoderTest(**v) for k, v in d["tests"].items()}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _save_cached_tests(ff: str, tests: dict[str, EncoderTest]) -> None:
+    import json
+    try:
+        _cache_path().write_text(json.dumps({"key": _ffmpeg_key(ff), "tests": {k: asdict(v) for k, v in tests.items()}},
+                                            indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def detect(configured_ffmpeg: str | None = None, run_tests: bool = True, use_cache: bool = True) -> FfmpegInfo:
     ff, fp = locate_ffmpeg(configured_ffmpeg)
     info = FfmpegInfo(ff, fp)
     if not ff:
@@ -187,6 +219,11 @@ def detect(configured_ffmpeg: str | None = None, run_tests: bool = True) -> Ffmp
     info.encoders = parse_encoders(e.stdout)
     h = pm.run([ff, "-hide_banner", "-hwaccels"], timeout=20)
     info.hwaccels = parse_hwaccels(h.stdout)
+    cached = _load_cached_tests(ff) if (use_cache and run_tests) else None
+    if cached:
+        info.tests = cached
+        log.info("Encoder test results reused (same FFmpeg as when they were measured)")
+        return info
     for name in HEVC_CANDIDATES + H264_CANDIDATES + PRORES_CANDIDATES:
         listed = name in info.encoders
         if not listed:
@@ -199,4 +236,6 @@ def detect(configured_ffmpeg: str | None = None, run_tests: bool = True) -> Ffmp
                      f"FAILED ({info.tests[name].detail})")
         else:
             info.tests[name] = EncoderTest(name, True)
+    if run_tests:
+        _save_cached_tests(ff, info.tests)
     return info

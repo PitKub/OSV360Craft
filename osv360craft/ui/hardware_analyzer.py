@@ -30,7 +30,7 @@ class HardwareAnalyzerPage:
                                                      "Settings are chosen from these results, never assumed.")
         top = QHBoxLayout()
         self.btn_detect = QPushButton("Detect again")
-        self.btn_detect.clicked.connect(self.detect)
+        self.btn_detect.clicked.connect(lambda: self.detect(retest=True))
         self.btn_txt = QPushButton("Export TXT...")
         self.btn_json = QPushButton("Export JSON...")
         self.btn_txt.clicked.connect(lambda: self.export("txt"))
@@ -109,14 +109,16 @@ class HardwareAnalyzerPage:
         self.refresh_bench()
 
     # ---- detection ------------------------------------------------------
-    def detect(self) -> None:
+    def detect(self, retest: bool = False) -> None:
+        """Start-up detection reuses earlier encoder results; 'Detect again' tests every encoder again."""
         self.btn_detect.setEnabled(False)
         self.report.setPlainText("Detecting hardware, OpenOSV and FFmpeg; testing each encoder ...")
         s = self.ctx.settings
         drives = [p for p in (s.get("paths.project_root"), str(Path.home())) if p]
 
         def work():
-            return hardware_report.build_report(s.get("paths.osvtool") or None, s.get("paths.ffmpeg") or None, drives)
+            return hardware_report.build_report(s.get("paths.osvtool") or None, s.get("paths.ffmpeg") or None, drives,
+                                                reuse_encoder_tests=not retest)
 
         def done(rep):
             self.btn_detect.setEnabled(True)

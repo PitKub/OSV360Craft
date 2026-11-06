@@ -208,7 +208,8 @@ def _opencl_icd() -> DependencyCheck:
 
 
 def build_report(osvtool_path: str | None = None, ffmpeg_path: str | None = None,
-                 drive_paths: list[str] | None = None, test_encoders: bool = True) -> HardwareReport:
+                 drive_paths: list[str] | None = None, test_encoders: bool = True,
+                 reuse_encoder_tests: bool = True) -> HardwareReport:
     t0 = time.time()
     os_name, os_ver = _windows_version()
     cpu = cpu_detector.detect()
@@ -216,7 +217,7 @@ def build_report(osvtool_path: str | None = None, ffmpeg_path: str | None = None
     gpus = gpu_detector.detect()
     tool = openosv_manager.locate_osvtool(osvtool_path)
     oinfo = openosv_manager.inspect(tool)
-    finfo = codec_detector.detect(ffmpeg_path, run_tests=test_encoders)
+    finfo = codec_detector.detect(ffmpeg_path, run_tests=test_encoders, use_cache=reuse_encoder_tests)
     roots: list[str] = []
     drives = []
     for p in drive_paths or [str(Path.home())]:

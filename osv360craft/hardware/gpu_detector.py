@@ -1,9 +1,10 @@
 """Graphics adapters, from several independent sources:
 
 1. ``nvidia-smi`` (NVIDIA only): name, VRAM total/free, driver, compute capability.
-2. Windows CIM (``Win32_VideoController``): every adapter, driver version.
-3. The display-class registry key: 64-bit VRAM size (CIM's AdapterRAM is a
-   32-bit field and reports at most 4 GiB).
+2. Windows ``EnumDisplayDevicesW``: the display adapters that are present.
+3. The display-class registry key: driver version and the 64-bit VRAM size.
+   (No PowerShell or WMI process is started: antivirus heuristics treat a
+   hidden PowerShell as suspicious.)
 4. osvtool's own backend diagnostics (CUDA / OpenCL device names) - the
    authority on what OpenOSV can actually render with; merged in by
    hardware_report.
@@ -110,71 +111,100 @@ def query_nvidia_smi(with_cc: bool = True) -> list[GpuInfo]:
     return parse_nvidia_smi(r.stdout) if r.ok else []
 
 
-def _cim_adapters() -> list[GpuInfo]:
-    data = pm.powershell_json(
-        "Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM,DriverVersion,PNPDeviceID "
-        "| ConvertTo-Json -Compress")
-    if data is None:
-        return []
-    if isinstance(data, dict):
-        data = [data]
-    out = []
-    for d in data:
-        name = (d.get("Name") or "").strip()
-        if not name:
+DISPLAY_CLASS = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+DISPLAY_DEVICE_MIRRORING_DRIVER = 0x8
+
+
+def _active_adapters() -> list[tuple[str, str]]:
+    """(name, PCI device id) of every display adapter Windows reports through
+    EnumDisplayDevicesW (user32). No other program is started."""
+    import ctypes
+    from ctypes import wintypes
+
+    class DISPLAY_DEVICEW(ctypes.Structure):
+        _fields_ = [("cb", wintypes.DWORD), ("DeviceName", wintypes.WCHAR * 32),
+                    ("DeviceString", wintypes.WCHAR * 128), ("StateFlags", wintypes.DWORD),
+                    ("DeviceID", wintypes.WCHAR * 128), ("DeviceKey", wintypes.WCHAR * 128)]
+
+    out: list[tuple[str, str]] = []
+    try:
+        enum = ctypes.windll.user32.EnumDisplayDevicesW
+    except (AttributeError, OSError):
+        return out
+    i = 0
+    while i < 64:
+        dd = DISPLAY_DEVICEW()
+        dd.cb = ctypes.sizeof(DISPLAY_DEVICEW)
+        if not enum(None, i, ctypes.byref(dd), 0):
+            break
+        i += 1
+        name = dd.DeviceString.strip()
+        if not name or dd.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER:
             continue
-        g = GpuInfo(name, vendor_of(name, d.get("PNPDeviceID")), driver_version=d.get("DriverVersion"),
-                    pnp_id=d.get("PNPDeviceID"), sources=["CIM"])
-        ram = d.get("AdapterRAM")
-        if isinstance(ram, int) and ram > 0:
-            g.vram_total_bytes = ram  # may be capped at 4 GiB; registry value preferred below
-        out.append(g)
+        item = (name, dd.DeviceID.strip())
+        if item not in out:
+            out.append(item)
     return out
 
 
-def _registry_vram() -> dict[str, int]:
-    """Adapter description -> qwMemorySize from the display class key."""
-    sizes: dict[str, int] = {}
-    if sys.platform != "win32":
-        return sizes
+def _registry_adapters() -> dict[str, dict]:
+    """DriverDesc -> {driver version, VRAM, device id} from the display class key."""
+    info: dict[str, dict] = {}
     try:
         import winreg
 
-        cls = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
-        root = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, cls)
-        i = 0
-        while True:
+        root = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, DISPLAY_CLASS)
+    except (ImportError, OSError):
+        return info
+    i = 0
+    while True:
+        try:
+            sub = winreg.EnumKey(root, i)
+        except OSError:
+            break
+        i += 1
+        if not re.fullmatch(r"\d{4}", sub):
+            continue
+        try:
+            k = winreg.OpenKey(root, sub)
+            desc = str(winreg.QueryValueEx(k, "DriverDesc")[0]).strip()
+        except OSError:
+            continue
+        d: dict = {}
+        for value, key in (("DriverVersion", "driver"), ("MatchingDeviceId", "device_id"),
+                           ("HardwareInformation.qwMemorySize", "vram")):
             try:
-                sub = winreg.EnumKey(root, i)
-            except OSError:
-                break
-            i += 1
-            if not re.fullmatch(r"\d{4}", sub):
-                continue
-            try:
-                k = winreg.OpenKey(root, sub)
-                desc = winreg.QueryValueEx(k, "DriverDesc")[0]
-                mem = winreg.QueryValueEx(k, "HardwareInformation.qwMemorySize")[0]
-                if isinstance(mem, bytes):
-                    mem = int.from_bytes(mem[:8], "little")
-                if isinstance(mem, int) and mem > 0:
-                    sizes[desc.strip()] = mem
+                v = winreg.QueryValueEx(k, value)[0]
             except OSError:
                 continue
-    except OSError:
-        pass
-    return sizes
+            if key == "vram" and isinstance(v, bytes):
+                v = int.from_bytes(v[:8], "little")
+            d[key] = v
+        info[desc] = d
+    return info
+
+
+def _windows_adapters() -> list[GpuInfo]:
+    reg = _registry_adapters()
+    active = _active_adapters()
+    if not active:  # EnumDisplayDevices unavailable (e.g. a service session): use the class key
+        active = [(name, str(d.get("device_id", ""))) for name, d in reg.items()]
+    gpus = []
+    for name, dev_id in active:
+        d = reg.get(name, {})
+        g = GpuInfo(name, vendor_of(name, dev_id or d.get("device_id")), driver_version=d.get("driver"),
+                    pnp_id=dev_id or d.get("device_id"), sources=["EnumDisplayDevices"])
+        if isinstance(d.get("vram"), int) and d["vram"] > 0:
+            g.vram_total_bytes = d["vram"]
+            g.sources.append("registry")
+        gpus.append(g)
+    return gpus
 
 
 def detect() -> list[GpuInfo]:
     gpus: list[GpuInfo] = []
     if sys.platform == "win32":
-        gpus = _cim_adapters()
-        reg = _registry_vram()
-        for g in gpus:
-            if g.name in reg:
-                g.vram_total_bytes = reg[g.name]
-                g.sources.append("registry")
+        gpus = _windows_adapters()
     nv = query_nvidia_smi()
     for n in nv:
         match = next((g for g in gpus if g.vendor == "NVIDIA" and
@@ -189,7 +219,7 @@ def detect() -> list[GpuInfo]:
         else:
             gpus.append(n)
     if not gpus:
-        log.info("No graphics adapter could be identified by CIM or nvidia-smi")
+        log.info("No graphics adapter could be identified (Windows display devices, registry, nvidia-smi)")
     return gpus
 
 

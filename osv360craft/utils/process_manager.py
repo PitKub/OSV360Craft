@@ -84,23 +84,3 @@ def run(args: Sequence[str | Path], timeout: float = 30.0, cwd: str | Path | Non
 
 def which(name: str) -> str | None:
     return shutil.which(name)
-
-
-def powershell_json(command: str, timeout: float = 20.0):
-    """Run a PowerShell snippet that ends in ConvertTo-Json; returns parsed JSON or None."""
-    import json
-
-    if sys.platform != "win32":
-        return None
-    exe = which("powershell.exe") or which("pwsh.exe")
-    if not exe:
-        return None
-    r = run([exe, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
-            timeout=timeout)
-    if not r.ok or not r.stdout.strip():
-        log.debug("PowerShell query failed: %s %s", command[:60], r.stderr[:200])
-        return None
-    try:
-        return json.loads(r.stdout)
-    except ValueError:
-        return None

@@ -32,7 +32,7 @@ From [GitHub Releases](https://github.com/PitKub/OSV360Craft/releases), download
   - You can choose a different folder.
   - **Custom setup** lets you leave OpenOSV or FFmpeg out if you already have them.
   - It adds OSV360Craft to the Start menu, optionally to the desktop, and to **Settings → Apps** for uninstalling.
-- **OSV360Craft-1.0.0-Windows-portable.zip.** The portable version, with the same engine and encoder in its `external` folder. Extract the whole ZIP and run `OSV360Craft.exe`.
+- **OSV360Craft-1.0.0-Windows-portable.zip.** The portable version: an `OSV360Craft` folder with the same engine and encoder in its `external` folder. Extract the whole ZIP and run `OSV360Craft\OSV360Craft.exe`. Keep the files in the folder together.
 
 **Requirements**
 
@@ -41,6 +41,15 @@ From [GitHub Releases](https://github.com/PitKub/OSV360Craft/releases), download
 - A GPU makes stitching much faster: CUDA on NVIDIA GTX 16 / RTX 20 and newer, OpenCL on AMD and Intel. Without one, the CPU renders, which is slow at 8K.
 
 Windows SmartScreen may warn about a new, unsigned app. If you downloaded it from this repository, select **More info → Run anyway**.
+
+**Antivirus warnings.** New, unsigned apps are sometimes flagged by antivirus *machine-learning* checks (names ending in `!ml`, for example `Trojan:Win32/Bearfoos.A!ml`). An early test build did trigger this, because it was a single self-extracting EXE. OSV360Craft is now built as a normal program folder that unpacks nothing to `%TEMP%`, and it never starts PowerShell. If you still see a warning:
+
+1. Check that you downloaded OSV360Craft from this repository's Releases page.
+2. Check the file on [VirusTotal](https://www.virustotal.com).
+3. Report a false detection to Microsoft at <https://www.microsoft.com/en-us/wdsi/filesubmission>.
+4. Open an issue here.
+
+Never turn your antivirus off to run any app. On a work computer, ask your IT or security team first.
 
 ## Features
 
@@ -152,7 +161,7 @@ When run from source, OSV360Craft finds the engine and encoder in `vendor\`. You
 Run `build.bat`. It does the following:
 
 1. Installs the pinned build tools.
-2. Compiles `dist\OSV360Craft.exe` with pyside6-deploy/Nuitka.
+2. Compiles the program folder `dist\OSV360Craft\` (`OSV360Craft.exe` with its DLLs) with Nuitka in standalone mode.
 3. Downloads the pinned, checksum-verified OpenOSV 0.6.4 and FFmpeg builds.
 4. Makes the portable ZIP and, if Inno Setup 6 is installed, `dist\OSV360Craft-1.0.0-Setup.exe`.
 
@@ -192,7 +201,7 @@ OSV360Craft is released under the [MIT License](LICENSE). Copyright © 2026 Piot
 
 ## Third-party software
 
-- **Windows EXE:** includes Qt and PySide6 (LGPL-3.0) and the Python runtime.
+- **Program folder:** includes Qt and PySide6 (LGPL-3.0) and the Python runtime.
 - **Installer and portable ZIP:** include the **OpenOSV** engine (Apache-2.0, with its own third-party notices, including LGPL FFmpeg libraries) and **FFmpeg** (GPL-3.0). FFmpeg's source code is attached to every release.
 - OpenOSV and FFmpeg are separate programs that OSV360Craft runs, so they do not change OSV360Craft's MIT licence.
 
