@@ -59,6 +59,7 @@ uniform mat3 lensR0;  uniform vec4 intr0;  uniform vec4 kA0;  uniform float kB0;
 uniform mat3 lensR1;  uniform vec4 intr1;  uniform vec4 kA1;  uniform float kB1;
 uniform float thetaMax;
 uniform float featherW;
+uniform mat3 levelR;   // bodyFromView from the gyro (horizon levelling / direction lock); identity = raw
 varying vec2 v;
 const float PI = 3.14159265358979;
 
@@ -90,7 +91,8 @@ void main() {
     float lat = asin(clamp(d.y, -1.0, 1.0));
     vec4 c;
     if (srcKind == 1) {
-        vec3 body = vec3(d.x, -d.z, d.y);   // view (-Z forward, +Y up) -> OpenOSV body (Y forward, Z up)
+        // view (-Z forward, +Y up) -> levelled view frame (Y forward, Z up) -> camera body
+        vec3 body = levelR * vec3(d.x, -d.z, d.y);
         float w0; float w1;
         vec4 c0 = lensSample(body, lensR0, intr0, kA0, kB0, 0.0, w0);
         vec4 c1 = lensSample(body, lensR1, intr1, kA1, kB1, 1.0, w1);
@@ -218,11 +220,13 @@ if HAVE_GL:
             self._vao = None
             self.gl_ok = True
 
-        def set_image(self, img: QImage, fisheye=None) -> None:
+        def set_image(self, img: QImage, fisheye=None, level=None) -> None:
             """An equirect frame, or (with ``fisheye`` = live.fisheye_calib.DualFisheye) a
-            side-by-side dual-fisheye frame projected on the GPU."""
+            side-by-side dual-fisheye frame projected on the GPU; ``level`` is the frame's
+            bodyFromView rotation (row-major 9 values) from live.attitude, None = raw body."""
             self._image = img
             self._fisheye = fisheye
+            self._level = level
             self._dirty = True
             self.update()
 
@@ -325,6 +329,8 @@ if HAVE_GL:
                     self._prog.setUniformValue(loc(f"kA{i}"), QVector4D(*lens.k[:4]))
                     self._prog.setUniformValue1f(loc(f"kB{i}"), lens.k[4])
                 self._prog.setUniformValue1f(loc("thetaMax"), fe.theta_max)
+                lvl = getattr(self, "_level", None) or [1, 0, 0, 0, 1, 0, 0, 0, 1]
+                self._prog.setUniformValue(loc("levelR"), QMatrix3x3([float(x) for x in lvl]))
                 self._prog.setUniformValue1f(loc("featherW"), fe.feather)
             self._vao.bind()
             f.glDrawArrays(0x0005, 0, 4)  # GL_TRIANGLE_STRIP
@@ -344,7 +350,7 @@ class SoftwarePanoramaViewer(_Interaction, QWidget):
         self._image: QImage | None = None
         self.gl_ok = False
 
-    def set_image(self, img: QImage, fisheye=None) -> None:
+    def set_image(self, img: QImage, fisheye=None, level=None) -> None:
         # Without OpenGL a dual-fisheye frame is shown as it is (two circles); stitched frames as panoramas.
         self._image = img
         self._fisheye = fisheye

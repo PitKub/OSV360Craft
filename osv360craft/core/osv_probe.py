@@ -49,6 +49,7 @@ class ClipInfo:
     video_streams: int | None = None
     warnings: list[str] = field(default_factory=list)
     calibration: dict | None = None   # probe "calibration" (slave / master lens records), for the live preview
+    djmd_schema: str | None = None    # metadata numbering OpenOSV read the clip in ("Osmo 360", "Avata 360")
 
     # ---- derived values -------------------------------------------------
     @property
@@ -115,6 +116,7 @@ def parse_probe_json(doc: dict, path: str) -> ClipInfo:
     ci.mode = doc.get("mode")
     ci.color_mode = doc.get("colorModeName")
     ci.has_audio = bool(doc.get("hasAudio"))
+    ci.djmd_schema = doc.get("djmdSchema") if isinstance(doc.get("djmdSchema"), str) else None
     ci.audio = doc.get("audio")
     ci.is_lrf = bool(doc.get("isLrf"))
     tl = doc.get("timeline")

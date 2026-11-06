@@ -82,3 +82,42 @@ def test_dual_fisheye_projection_points_the_right_way(yaw, pitch):
     er, eg = expected_colour(yaw, pitch)
     assert abs(c.red() - er) <= 4 and abs(c.green() - eg) <= 4, (c.red(), c.green(), er, eg)
     v.close()
+
+
+@pytest.mark.parametrize("pitch", [0, 50])
+def test_preview_levelling_on_a_tilted_camera(pitch):
+    """A camera held rolled 30 deg and pitched 20 deg: with the gyro levelling the preview shows the
+    world level - looking straight ahead gives the horizon, looking up 50 deg gives latitude 50."""
+    np = pytest.importorskip("numpy")
+    import math
+    from PySide6.QtCore import QEventLoop, QTimer
+    from PySide6.QtGui import QImage
+    from PySide6.QtWidgets import QApplication
+
+    from fisheye_synth import calibration, render
+    from osv360craft.live import attitude as at
+    from osv360craft.live import fisheye_calib as fc
+    from osv360craft.live.panorama_viewer import gl_available, make_viewer
+
+    QApplication.instance() or QApplication([])
+    if not gl_available():
+        pytest.skip("no OpenGL context available")
+    roll, tilt = math.radians(30), math.radians(20)
+    w = at.mul(at.quat_matrix(math.cos(tilt / 2), math.sin(tilt / 2), 0, 0),     # pitch about X
+               at.quat_matrix(math.cos(roll / 2), 0, math.sin(roll / 2), 0))     # roll about Y (forward)
+    fe = fc.from_probe(calibration(), 3840)
+    arr = np.ascontiguousarray(render(fe, world_from_body=w))
+    img = QImage(arr.data, arr.shape[1], arr.shape[0], arr.shape[1] * 4, QImage.Format_RGBA8888).copy()
+    level = at.Attitude([w]).body_from_view(0, "horizon")
+    v = make_viewer()
+    v.resize(200, 200)
+    v.show()
+    v.set_image(img, fe, level)
+    v.view.pitch, v.view.fov = float(pitch), 20.0
+    loop = QEventLoop()
+    QTimer.singleShot(500, loop.quit)
+    loop.exec()
+    c = v.grabFramebuffer().pixelColor(100, 100)
+    expected_green = (pitch + 90) / 180 * 255                    # latitude in world
+    assert abs(c.green() - expected_green) <= 4, (c.green(), expected_green)
+    v.close()

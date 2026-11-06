@@ -306,3 +306,37 @@ def test_fisheye_calibration_matches_openosv_conventions():
     # body "up" is image up (smaller v) on both lenses
     assert fc.project(fe8.master, (0.0, 0.7, 0.7))[1] < 512 and fc.project(fe8.slave, (0.0, -0.7, 0.7))[1] < 512
     assert not fc.from_probe(None, 3840).calibrated
+
+
+def test_preview_levelling_follows_openosv_rules():
+    """live.attitude reproduces OpenOSV's attitude reading and HorizonLock / Full / Off."""
+    import math as _m
+    import random
+    from osv360craft.live import attitude as at
+
+    # the default reading of stored floats f0..f3 is the quaternion (f3; -f1, f2, f0)
+    f = (0.1, 0.2, 0.3, 0.9)
+    assert at.world_from_mounted(*f) == at.quat_matrix(0.9, -0.2, 0.3, 0.1)
+    rnd = random.Random(7)
+    ws = [at.quat_matrix(*(rnd.uniform(-1, 1) for _ in range(4))) for _ in range(20)]
+    # keep the lens axis near horizontal (an upright camera): mount stays identity
+    ws = [at.mul(at.quat_matrix(_m.cos(a / 2), 0, 0, _m.sin(a / 2)),
+                 at.quat_matrix(_m.cos(r / 2), 0, _m.sin(r / 2), 0))
+          for a, r in ((rnd.uniform(-3, 3), rnd.uniform(-0.6, 0.6)) for _ in range(20))]
+    att = at.Attitude(ws)
+    assert att.mount == at.IDENTITY
+    for i, w in enumerate(ws):
+        b = att.body_from_view(i, "horizon")
+        up = at.apply(at.mul(w, b), (0, 0, 1))
+        fwd = at.apply(at.mul(w, b), (0, 1, 0))
+        assert all(abs(x - y) < 1e-9 for x, y in zip(up, (0, 0, 1)))       # view up = world up
+        assert abs(fwd[2]) < 1e-9                                          # level forward
+        body_fwd = at.apply(w, (0, 1, 0))
+        h = _m.hypot(body_fwd[0], body_fwd[1])
+        assert abs(fwd[0] - body_fwd[0] / h) < 1e-9 and abs(fwd[1] - body_fwd[1] / h) < 1e-9  # heading kept
+        locked = at.mul(w, att.body_from_view(i, "full"))
+        assert all(abs(x - y) < 1e-9 for x, y in zip(locked, ws[0]))        # direction lock: fixed in world
+        assert att.body_from_view(i, "off") == at.IDENTITY
+    # lens axes vertical (Avata-style mounting): the levelling mount turns a quarter
+    lens_up = at.quat_matrix(_m.cos(_m.pi / 4), _m.sin(_m.pi / 4), 0, 0)   # body +Y -> world +Z
+    assert at.levelling_mount([lens_up] * 5) != at.IDENTITY

@@ -247,3 +247,45 @@ def test_realtime_source_streams_lrf_and_osv(tmp_path, fake_osv):
         assert got[0][1].width() == 2048 and got[0][1].height() == 1024
         assert rs.grab_frame("ffmpeg", p, 3, 30.0).width() == 2048
     assert set(tmp_path.rglob("*")) == before  # no proxy or cache files created
+
+
+def test_realtime_proxy_at_another_frame_rate(tmp_path, fake_osv):
+    """An .LRF at half the clip's frame rate: frames are numbered in CLIP frames (0, 2, 4, ...),
+    so the timeline, seeking and the end of the clip stay right."""
+    from osv360craft.live import realtime_source as rs
+
+    lrf = fake_osv.with_suffix(".LRF")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=2048x1024:r=15", "-t", "2",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-f", "mp4", str(lrf)], check=True)
+    plan = rs.choose_source(str(fake_osv), nvdec=False, ffprobe="ffprobe")
+    assert plan.kind == "lrf" and abs(plan.fps - 15.0) < 0.01 and plan.frames == 30
+    src = rs.RealtimeSource("ffmpeg", plan, fps=30.0)
+    assert src.source_fps == 15.0
+    src.start(10)                                   # clip frame 10 = 0.333 s
+    got, t0 = [], time.time()
+    while not src.ended and time.time() - t0 < 30:
+        item = src.get()
+        if item:
+            got.append(item[0])
+        else:
+            time.sleep(0.005)
+    src.stop()
+    assert got[:4] == [10, 12, 14, 16]
+    assert 55 <= got[-1] <= 60                       # the proxy's end lands at the clip's end (60 frames)
+    assert not src.error
+
+
+def test_attitude_loaded_through_osvtool(tmp_path, fake_osvtool, fake_osv):
+    """live.attitude.load reads osvtool's --imu CSV, fills a missing frame from the previous one,
+    applies the Avata-numbering product mount, and leaves no file behind."""
+    import tempfile
+    from osv360craft.live import attitude as at
+
+    before = set(Path(tempfile.gettempdir()).glob("osv360craft_imu_*"))
+    att = at.load(fake_osvtool, str(fake_osv), avata_numbering=False)
+    assert att is not None and len(att) == 12
+    assert att.wfb[3] == att.wfb[2] == at.IDENTITY
+    assert att.body_from_view(5, "horizon") == at.IDENTITY          # a level camera needs no correction
+    av = at.load(fake_osvtool, str(fake_osv), avata_numbering=True)
+    assert av.wfb[0] == at.transpose(at.AVATA_PRODUCT_MOUNT)
+    assert set(Path(tempfile.gettempdir()).glob("osv360craft_imu_*")) == before

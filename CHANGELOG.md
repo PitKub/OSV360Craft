@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Real-time preview is levelled like OpenOSV.** The quick stitch now uses the camera's gyroscope with the stabilisation chosen in Stitching Controls (horizon levelling, direction lock or off). It follows OpenOSV's own orientation chain, including its Avata-layout reading of Osmo 360 II clips, so it matches the exact stitch shown on pause. RockSteady smoothing is not reproduced in the preview.
+- **Real-time playback no longer stops or freezes by itself.**
+  - **Frame rate:** an `.LRF` proxy at a different frame rate from its `.OSV` is mapped onto the clip's frames. It used to play at the wrong speed and end early.
+  - **FFmpeg messages:** these are read continuously; a full message pipe could freeze the decoder.
+  - **Timeline:** clicking the timeline or the frame-step buttons while playing jumps and keeps playing.
+  - **Early stop:** if the preview does stop early, the status line says why.
+
 - **Real-time 360 preview.**
   - **Source:** Live Stitching plays the `.LRF` proxy that the Osmo 360 records next to each `.OSV`. Without one, it decodes the `.OSV`'s two lenses on the GPU (NVDEC), scaled down. No proxy is created, nothing is written to disk.
   - **Stitching:** the graphics card projects the lenses onto the sphere with OpenOSV's lens calibration (Kannala–Brandt lenses and the rotation of each lens, as read from the clip).

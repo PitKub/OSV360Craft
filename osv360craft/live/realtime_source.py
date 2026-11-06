@@ -37,12 +37,36 @@ class SourcePlan:
     kind: str            # "lrf" or "osv-gpu" or "osv-cpu"
     path: str
     description: str
+    fps: float | None = None      # the source's own frame rate (an .LRF may differ from its .OSV)
+    frames: int | None = None
 
 
-def choose_source(osv: str, nvdec: bool) -> SourcePlan:
+def probe_video(ffprobe: str | None, path: str) -> tuple[float | None, int | None]:
+    """Frame rate and frame count of the first video stream (ffprobe), or (None, None)."""
+    if not ffprobe:
+        return None, None
+    import json
+    from fractions import Fraction
+
+    from osv360craft.utils import process_manager as pm
+    r = pm.run([ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries",
+                "stream=avg_frame_rate,r_frame_rate,nb_frames", "-of", "json", path], timeout=30)
+    try:
+        st = json.loads(r.stdout)["streams"][0]
+        rate = st.get("avg_frame_rate") or st.get("r_frame_rate")
+        fps = float(Fraction(rate)) if rate and rate != "0/0" else None
+        n = int(st["nb_frames"]) if str(st.get("nb_frames", "")).isdigit() else None
+        return fps, n
+    except (ValueError, KeyError, IndexError, ZeroDivisionError):
+        return None, None
+
+
+def choose_source(osv: str, nvdec: bool, ffprobe: str | None = None) -> SourcePlan:
     lrf = find_proxy(Path(osv))
     if lrf is not None:
-        return SourcePlan("lrf", str(lrf), f"camera proxy {lrf.name} (decoded in real time)")
+        fps, frames = probe_video(ffprobe, str(lrf))
+        rate = f", {fps:.3f} fps" if fps else ""
+        return SourcePlan("lrf", str(lrf), f"camera proxy {lrf.name} (decoded in real time{rate})", fps, frames)
     if nvdec:
         return SourcePlan("osv-gpu", osv, "no .LRF beside the clip: both lenses decoded on the GPU (NVDEC), scaled down")
     return SourcePlan("osv-cpu", osv, "no .LRF and no NVDEC: both 8K lenses decoded on the CPU (may not keep up)")
@@ -69,7 +93,11 @@ class RealtimeSource:
     """Decodes from a start frame in a background thread; get() hands out frames in order."""
 
     def __init__(self, ffmpeg: str, plan: SourcePlan, fps: float, queue_frames: int = 8) -> None:
+        """``fps`` is the CLIP's frame rate: frames are numbered in clip frames, even when the
+        source (an .LRF) runs at another rate."""
         self.ffmpeg, self.plan, self.fps = ffmpeg, plan, fps or 30.0
+        self.source_fps = plan.fps or self.fps
+        self.stderr_tail: list[str] = []
         self.frames: queue.Queue = queue.Queue(maxsize=queue_frames)
         self._proc: subprocess.Popen | None = None
         self._thread: threading.Thread | None = None
@@ -93,17 +121,29 @@ class RealtimeSource:
             return
         self._thread = threading.Thread(target=self._read, args=(self._proc, frame), daemon=True, name="realtime")
         self._thread.start()
+        # FFmpeg's messages are read continuously: an unread pipe fills up and freezes the decoder.
+        threading.Thread(target=self._drain, args=(self._proc,), daemon=True, name="realtime-log").start()
+
+    def _drain(self, proc: subprocess.Popen) -> None:
+        assert proc.stderr is not None
+        for raw in iter(proc.stderr.readline, b""):
+            line = raw.decode("utf-8", "replace").strip()
+            if line:
+                self.stderr_tail = (self.stderr_tail + [line])[-20:]
 
     def _read(self, proc: subprocess.Popen, first: int) -> None:
         from PySide6.QtGui import QImage
 
         size = WIDTH * HEIGHT * 4
-        n = first
+        k = 0
+        ratio = self.fps / self.source_fps   # clip frames per source frame (2.0 for a 30 fps proxy of a 60 fps clip)
         assert proc.stdout is not None
         while not self._stop.is_set():
             buf = proc.stdout.read(size)
             if not buf or len(buf) < size:
                 break
+            n = first + int(round(k * ratio))
+            k += 1
             img = QImage(buf, WIDTH, HEIGHT, WIDTH * 4, QImage.Format_RGBA8888).copy()  # own the pixels
             while not self._stop.is_set():
                 try:
@@ -111,12 +151,10 @@ class RealtimeSource:
                     break
                 except queue.Full:
                     continue
-            n += 1
         if not self._stop.is_set():
             rc = proc.wait()
-            err = (proc.stderr.read() or b"").decode("utf-8", "replace").strip() if proc.stderr else ""
-            if rc not in (0, None) and err:
-                self.error = err.splitlines()[-1][:300]
+            if rc not in (0, None):
+                self.error = (self.stderr_tail[-1] if self.stderr_tail else f"FFmpeg exit code {rc}")[:300]
                 log.warning("Real-time preview source stopped: %s", self.error)
             self.ended = True
 

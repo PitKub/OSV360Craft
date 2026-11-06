@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QGroupBox, QHB
 from osv360craft.core import osv_probe
 from osv360craft.hardware import gpu_detector
 from osv360craft.hardware.auto_optimizer import PREVIEW_MODES
+from osv360craft.live import attitude as attitude_mod
 from osv360craft.live import fisheye_calib, realtime_source
 from osv360craft.live.panorama_viewer import SoftwarePanoramaViewer, make_viewer
 from osv360craft.live.preview_engine import PreviewConfig, PreviewEngine
@@ -57,6 +58,7 @@ class LiveStitchingPage:
         self.rt: realtime_source.RealtimeSource | None = None
         self.rt_plan: realtime_source.SourcePlan | None = None
         self.fisheye: fisheye_calib.DualFisheye | None = None
+        self.attitude: attitude_mod.Attitude | None = None
         self._exact_shown = -1
 
         self.widget = QWidget()
@@ -205,7 +207,7 @@ class LiveStitchingPage:
             old.hide()
             old.deleteLater()
             if img is not None:
-                v.set_image(img, old.current_fisheye())
+                v.set_image(img, old.current_fisheye(), getattr(old, "_level", None))
         self.viewer = v
         self.viewer_box.addWidget(v, 1)
 
@@ -261,7 +263,7 @@ class LiveStitchingPage:
     def _setup_realtime(self, ci: osv_probe.ClipInfo) -> None:
         rep = self.ctx.hardware
         nvdec = bool(rep and rep.nvdec_status()[0] == "available" and "cuda" in rep.ffmpeg.hwaccels)
-        self.rt_plan = realtime_source.choose_source(ci.path, nvdec)
+        self.rt_plan = realtime_source.choose_source(ci.path, nvdec, rep.ffmpeg.ffprobe if rep else None)
         self.fisheye = fisheye_calib.from_probe(ci.calibration, ci.stream_h)
         realtime_ok = self.rt_plan.kind != "osv-cpu" and bool(rep and rep.ffmpeg.ffmpeg)
         if realtime_ok and not getattr(self, "_user_mode", False):
@@ -270,6 +272,27 @@ class LiveStitchingPage:
             self.mode.blockSignals(False)
         self.perf.set("Real-time source", self.rt_plan.description + ("" if self.fisheye.calibrated else
                                                                         f"; {self.fisheye.note}"))
+        # gyro orientation, so the quick stitch is levelled like OpenOSV's (loaded in the background)
+        self.attitude = None
+        self.perf.set("Levelling", "reading the camera's gyro data ...")
+        tool, clip, avata = str(rep.openosv.path), ci.path, ci.djmd_schema == "Avata 360"
+
+        def loaded(att) -> None:
+            if self.clip is None or self.clip.path != clip:
+                return
+            self.attitude = att
+            self.perf.set("Levelling", "gyro, as OpenOSV (mode from Stitching Controls)" if att else
+                          "no gyro data in this clip: shown as the camera was held", None if att else "warn")
+            if not self.playing and self.viewer.current_fisheye() is not None:
+                self.viewer.set_image(self.viewer.current_image(), self.fisheye, self._level(self.current))
+
+        self.ctx.run_task(lambda: attitude_mod.load(tool, clip, avata), loaded)
+
+    def _level(self, n: int):
+        """bodyFromView for frame N under the chosen stabilisation (None without gyro data)."""
+        if self.attitude is None:
+            return None
+        return self.attitude.body_from_view(n, self.ctx.export.stitch.stab)
 
     @property
     def realtime(self) -> bool:
@@ -417,6 +440,9 @@ class LiveStitchingPage:
             return
         n = max(0, min(n, (self.clip.frame_count or 1) - 1))
         self.current = n
+        if self.playing and self.rt is not None and not force:
+            self.rt.start(n)            # jump and keep playing in real time
+            return
         if self.playing:
             self.stop()
         self._exact_shown = -1
@@ -442,11 +468,12 @@ class LiveStitchingPage:
             self.engine.cancel()
             self.rt = realtime_source.RealtimeSource(rep.ffmpeg.ffmpeg, self.rt_plan, self.clip.fps or 30.0)
             self.rt.start(self.current)
+            self.timer.start(max(1, int(1000 / self.rt.source_fps)))  # paced by the proxy's own frame rate
             self.status.setText("Real-time preview from " + self.rt_plan.description +
                                 ". Quick stitch while playing; pause for OpenOSV's exact stitch.")
         else:
             self.engine.play_from(self.current)
-        self.timer.start(max(1, int(1000 / (self.clip.fps or 30))))
+            self.timer.start(max(1, int(1000 / (self.clip.fps or 30))))
 
     def stop(self, exact: bool = True) -> None:
         if self.playing:
@@ -482,14 +509,17 @@ class LiveStitchingPage:
         item = self.rt.get()
         if item is None:
             if self.rt.ended:
+                last = (self.clip.frame_count or 1) - 1
                 if self.rt.error:
-                    self.status.setText("Real-time preview stopped: " + self.rt.error)
+                    self.status.setText(f"Real-time preview stopped at frame {self.current}: {self.rt.error}")
+                elif self.current < last - max(2, int((self.clip.fps or 30) / max(1.0, self.rt.source_fps))) - 1:
+                    self.status.setText(f"The proxy ({Path(self.rt_plan.path).name}) ends at frame {self.current}, "
+                                        f"before the clip's last frame ({last}). Choose a 2K or 4K preview to "
+                                        "watch the rest with OpenOSV's exact stitch.")
                 self.stop()
-            elif self.rt.error:
-                self.status.setText("Real-time preview: " + self.rt.error)
             return
         n, img = item
-        self.viewer.set_image(img, self.fisheye)
+        self.viewer.set_image(img, self.fisheye, self._level(n))
         self.current = n
         self.slider.blockSignals(True)
         self.slider.setValue(n)
@@ -516,7 +546,7 @@ class LiveStitchingPage:
     def _on_quick(self, n: int, img) -> None:
         # only if the exact OpenOSV frame for this position has not arrived already
         if img is not None and not img.isNull() and n == self.current and self._exact_shown != n and not self.playing:
-            self.viewer.set_image(img, self.fisheye)
+            self.viewer.set_image(img, self.fisheye, self._level(n))
             self.pos.setText(f"{n} / {(self.clip.frame_count or 1) - 1}  ({n / (self.clip.fps or 30):.2f} s)")
 
     # ---- side panels ----------------------------------------------------

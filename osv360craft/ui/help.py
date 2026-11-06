@@ -61,7 +61,8 @@ panorama, <b>H</b> shows a horizon guide.</p>
 <p><b>Real-time (camera proxy, quick stitch)</b> is the default preview. It plays the <code>.LRF</code> proxy that
 the Osmo 360 records next to every <code>.OSV</code>. If there is no <code>.LRF</code>, it decodes the
 <code>.OSV</code>'s two lenses on the graphics card. Your GPU projects the lenses onto the sphere with OpenOSV's
-lens calibration, so playback, scrubbing and looking around are immediate. Nothing is written to disk.
+lens calibration and levels the view with the camera's gyroscope, as OpenOSV does, so playback, scrubbing and
+looking around are immediate. Nothing is written to disk.
 It is a quick stitch: no seam carving, sky correction or colour conversion.</p>
 <p>When you <b>pause or scrub</b>, the quick frame is replaced by OpenOSV's exact stitch of that frame, which
 takes a few seconds at 8K. The 2K, 4K, Native and Performance modes play OpenOSV's exact stitch instead,

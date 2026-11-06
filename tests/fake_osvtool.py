@@ -155,6 +155,16 @@ def main():
         if real:
             return subprocess.run([real, "spherical", *rest]).returncode
         err("spherical tagging needs FAKE_REAL_OSVTOOL", 3)
+    if cmd == "extract" and "--imu" in rest:
+        # osvtool's per-frame CSV; stored floats (0, 0, 0, 1) read as the identity attitude.
+        # Frame 3 is missing, as when a metadata sample fails to decode.
+        with open(opt(rest, "--imu"), "w", encoding="utf-8") as f:
+            f.write("frame,seq,timestamp_us,att_w,att_x,att_y,att_z,acc_x,acc_y,acc_z,iso,exposure_num,"
+                    "exposure_den,wb_cct,sensor_temp\n")
+            for i in range(int(os.environ.get("FAKE_FRAMES", "12"))):
+                if i != 3:
+                    f.write(f"{i},{2 * i},{i * 33333},0,0,0,1,0,0,9.8,100,1,60,5600,40\n")
+        return 0
     if cmd == "extract":
         out = opt(rest, "--audio")
         r = subprocess.run([FFMPEG, "-v", "error", "-y", "-i", rest[0], "-map", "0:a:0", "-c", "copy", out])

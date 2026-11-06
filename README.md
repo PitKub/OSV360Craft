@@ -137,6 +137,7 @@ Live Stitching has two kinds of preview. The preview never changes the export.
 - **Real-time (camera proxy, quick stitch).** This is the default when it is possible.
   - **Source:** the Osmo 360 records a small `.LRF` proxy (2048 × 1024, both lenses) beside every `.OSV`. OSV360Craft plays that proxy in real time. If only the `.OSV` was copied, it decodes the `.OSV`'s two lenses on the GPU (NVDEC) and scales them down on the fly.
   - **Stitching:** the graphics card projects the lenses onto the sphere with OpenOSV's own lens calibration, read from the clip.
+  - **Levelling:** the camera's gyroscope levels the view the same way OpenOSV does, using the stabilisation chosen in Stitching Controls.
   - **Nothing is written to disk:** no proxy is created and nothing is cached.
   - **What is skipped:** this is a quick stitch, without OpenOSV's seam carving, sky correction or colour conversion.
 - **Exact OpenOSV stitch.** When you pause or scrub, the quick frame is replaced by OpenOSV's full stitch of that frame, which takes a few seconds at 8K. The 2K, 4K, Native and Performance modes also play OpenOSV's exact stitch, but each burst of frames is a separate OpenOSV run, so they are slow at 8K.

@@ -50,7 +50,9 @@ def encode(d_body):
     return (lon + np.pi) / (2 * np.pi), (lat + np.pi / 2) / np.pi
 
 
-def render(fe: DualFisheye, half=1024):
+def render(fe: DualFisheye, half=1024, world_from_body=None):
+    """``world_from_body`` (3x3 row-major list): colours then encode WORLD directions, as if the
+    camera body were held in that orientation."""
     out = np.zeros((half, 2 * half, 4), np.uint8)
     out[..., 3] = 255
     for i, lens in enumerate((fe.slave, fe.master)):
@@ -66,6 +68,8 @@ def render(fe: DualFisheye, half=1024):
         d_lens = np.stack([np.sin(th) * np.cos(phi), np.sin(th) * np.sin(phi), np.cos(th)], -1)
         R = np.array(lens.rows, float).reshape(3, 3)
         d_body = d_lens @ R                                      # R^T d_lens, row vectors
+        if world_from_body is not None:
+            d_body = d_body @ np.array(world_from_body, float).reshape(3, 3).T
         u, v = encode(d_body)
         ok = th < fe.theta_max
         out[..., i * half:(i + 1) * half, 0] = np.where(ok, (u * 255).round(), 0)
