@@ -1,0 +1,6 @@
+# Runtime
+PySide6==6.12.0
+psutil==7.1.3
+# Windows build (build.bat): pyside6-deploy compiles with Nuitka, as ProxyCraft does
+Nuitka==4.3.4
+ziglang==0.16.0
