@@ -4,6 +4,8 @@
 
 **Free • Open Source • MIT License**
 
+> **Project paused.** OSV360Craft works, but its stitch quality is not yet at the level of DJI Studio, so there is no release yet. Stitching is done by the OpenOSV engine, which does not officially support the Osmo 360 II. Development may resume if that improves.
+
 OSV360Craft is a free, open-source Windows application that stitches original **DJI Osmo 360 `.OSV`** recordings into 360-degree equirectangular video. It does two things:
 
 - **Live Stitching.** Open an `.OSV` and look around the stitched sphere straight away, with no export.
