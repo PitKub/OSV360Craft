@@ -15,6 +15,9 @@ from osv360craft.hardware.auto_optimizer import PROFILES
 from osv360craft.hardware.codec_detector import HEVC_CANDIDATES
 from osv360craft.ui.widgets import page
 from osv360craft.utils.file_manager import human_bytes
+from osv360craft.utils.logging import get_logger
+
+log = get_logger(__name__)
 
 
 class _BenchSignals(QObject):
@@ -25,6 +28,7 @@ class HardwareAnalyzerPage:
     def __init__(self, ctx) -> None:
         self.ctx = ctx
         self._bench: benchmark.Benchmark | None = None
+        self._detecting = False
         self.sig = _BenchSignals()
         self.widget, lay = page("Hardware Analyzer", "Everything below is detected or measured on this computer. "
                                                      "Settings are chosen from these results, never assumed.")
@@ -111,7 +115,11 @@ class HardwareAnalyzerPage:
     # ---- detection ------------------------------------------------------
     def detect(self, retest: bool = False) -> None:
         """Start-up detection reuses earlier encoder results; 'Detect again' tests every encoder again."""
+        if self._detecting:
+            return
+        self._detecting = True
         self.btn_detect.setEnabled(False)
+        self.btn_bench.setEnabled(False)
         self.report.setPlainText("Detecting hardware, OpenOSV and FFmpeg; testing each encoder ...")
         s = self.ctx.settings
         drives = [p for p in (s.get("paths.project_root"), str(Path.home())) if p]
@@ -120,11 +128,20 @@ class HardwareAnalyzerPage:
             return hardware_report.build_report(s.get("paths.osvtool") or None, s.get("paths.ffmpeg") or None, drives,
                                                 reuse_encoder_tests=not retest)
 
-        def done(rep):
+        def finished() -> None:
+            self._detecting = False
             self.btn_detect.setEnabled(True)
+            self.btn_bench.setEnabled(True)
+
+        def done(rep):
+            finished()
             self.ctx.set_hardware(rep)
 
-        self.ctx.run_task(work, done, lambda e: self.btn_detect.setEnabled(True))
+        def failed(e):
+            finished()
+            self.report.setPlainText(f"Detection failed: {e}")
+
+        self.ctx.run_task(work, done, failed)
 
     def refresh(self) -> None:
         if self.ctx.hardware:
@@ -172,10 +189,30 @@ class HardwareAnalyzerPage:
                           lambda e: self.btn_disk.setEnabled(True))
 
     # ---- benchmark ------------------------------------------------------
-    def run_benchmark(self, clip: str | None = None) -> None:
+    def run_benchmark(self, clip: str | bool | None = None) -> None:
+        if not isinstance(clip, str):  # QPushButton.clicked passes a bool
+            clip = None
         rep = self.ctx.hardware
-        if not rep or not rep.openosv.found:
-            QMessageBox.warning(self.widget, "Benchmark", "OpenOSV (osvtool) was not found. Install it first.")
+        log.info("Benchmark requested: detection %s, osvtool found=%s path=%s error=%s, detecting now=%s",
+                 "done" if rep else "not finished", rep and rep.openosv.found, rep and rep.openosv.path,
+                 rep and rep.openosv.error, self._detecting)
+        if rep is None or self._detecting:
+            QMessageBox.information(self.widget, "Benchmark",
+                                    "Hardware detection is still running (it tests the video encoders). "
+                                    "Please wait until the report below is filled in, then press Run benchmark again.")
+            return
+        if not rep.openosv.found:
+            o = rep.openosv
+            r = QMessageBox.warning(
+                self.widget, "Benchmark",
+                "OpenOSV (osvtool) is not available, so the stitching benchmark cannot run.\n\n"
+                f"Reason: {o.error or 'not found'}\n"
+                f"Path: {o.path or 'none found'}\n\n"
+                "The installer puts it in external\\OpenOSV\\cli next to OSV360Craft.exe; you can also set its path "
+                "in Settings. Detect again now?",
+                QMessageBox.Yes | QMessageBox.No)
+            if r == QMessageBox.Yes:
+                self.detect(retest=False)
             return
         if not clip:
             clip, _ = QFileDialog.getOpenFileName(self.widget, "Choose a short .OSV clip for the benchmark", "",

@@ -8,6 +8,7 @@
 - **No PowerShell.** GPU detection now uses Windows display-device and registry information, and drive detection (SSD/HDD, bus) uses a direct Windows storage query. No hidden PowerShell process is started.
 - **Faster start.** Encoder test results are remembered until FFmpeg changes; **Detect again** in Hardware Analyzer tests every encoder again.
 - **Recordings on network drives.** Paths such as `//NAS/share/...` are passed to OpenOSV in Windows form. OpenOSV's command-line parser took them for options and stopped with "file is required".
+- **Benchmark button.** It said "OpenOSV (osvtool) was not found" when it was pressed while hardware detection was still running. It is now disabled during detection. If OpenOSV really is missing, the message shows the reason and the path, and offers to detect again.
 - **Benchmark.**
   - Each hardware decoder is tested separately, and its figures are real GPU figures.
   - 8K encode figures no longer include drawing the test pattern.
