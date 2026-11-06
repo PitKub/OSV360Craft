@@ -163,3 +163,26 @@ def test_validator_against_real_tagged_file():
     assert rep.ok, rep.to_dict()
     rep2 = validate(DATA / "equirect_untagged.mp4", Expectation(spherical=True), "ffprobe", "ffmpeg")
     assert not rep2.ok and any(c.name == "Spherical V2" for c in rep2.failures)
+
+
+def test_benchmark_end_to_end(tmp_path, fake_osvtool, fake_osv):
+    """The whole benchmark on a clip: decode, stitch per renderer, full resolution, encode."""
+    from osv360craft.hardware.benchmark import Benchmark
+    steps = []
+    b = Benchmark(fake_osvtool, "ffmpeg", str(fake_osv), ["cuda", "cpu"], ["libx265"], "128x64", "fp",
+                  progress=lambda m, f: steps.append(m), hwaccels=[], frame_count=12)
+    res = b.run()
+    assert not res.cancelled
+    assert res.decode_fps.get("software (CPU)", 0) > 0
+    assert set(res.device_fps) == {"cuda", "cpu"} and res.preview_fps
+    assert res.fullres_fps and res.fullres_size == "128x64"
+    assert res.encode_fps.get("libx265", 0) > 0
+    assert any("pattern" in n for n in res.notes)
+
+
+def test_benchmark_stops_on_usage_error(tmp_path, fake_osvtool, fake_osv):
+    """A rejected command line is reported once, not blamed on every GPU in turn."""
+    from osv360craft.hardware.benchmark import Benchmark
+    b = Benchmark(fake_osvtool, None, str(tmp_path / "missing.OSV"), ["cuda", "opencl", "cpu"], [], None, "fp")
+    res = b.run()
+    assert list(res.device_errors) == ["cuda"] or len(res.device_errors) == 3

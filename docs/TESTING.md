@@ -2,7 +2,7 @@
 
 ## Automated (runs on every push, `.github/workflows/tests.yml`)
 
-`python -m pytest -q` runs the suite below. It was last run on Linux with a real OpenOSV 0.6.4 `osvtool` built from source (CPU only): 29 passed.
+`python -m pytest -q` runs the suite below. It was last run on Linux with a real OpenOSV 0.6.4 `osvtool` built from source (CPU only, with CLI11 2.7.2 as in the official Windows build): 32 passed.
 
 | Area | What is tested |
 |---|---|
@@ -17,6 +17,22 @@
 | UI | Every page opens, the theme switches and is remembered, and "Use this heading" reaches the settings (offscreen Qt). |
 
 The end-to-end tests use `tests/fake_osvtool.py`, a stand-in that follows osvtool's documented contract (probe schema, progress format, `error:` lines, exit codes, image numbering) and makes real 10-bit media with FFmpeg. It does **not** stitch. 360 tagging in those tests is done by the real osvtool given in `OSV360CRAFT_TEST_OSVTOOL`; tests that need it are skipped without it.
+
+## Findings from real hardware
+
+- **2026-11-06, first benchmark on a Windows PC with an NVIDIA GPU:**
+  - **What failed:** the stitch test failed on every renderer with `file is required`. The clip was on a network path, and CLI11's Windows-style option handling misread it (see the integration report).
+  - **Fixes:**
+    - paths are now passed in native form;
+    - the benchmark stops after a command-line error instead of blaming each renderer;
+    - hardware decoders are tested one by one (NVDEC, D3D11VA, Quick Sync), each with GPU output so a failure cannot silently fall back to software;
+    - the 8K encode test no longer times the generation of its test pattern;
+    - short clips are benchmarked over the frames they actually have.
+  - **Measured on that PC before the fixes** (8K 10-bit, figures as reported):
+    - decode, one lens: about 30.5 fps;
+    - NVENC: 11.7 fps;
+    - x265: 1.9 fps;
+    - peaks: VRAM 3.4 GB, RAM 6.6 GB.
 
 ## Manual checklist with real footage (required before calling a release verified)
 

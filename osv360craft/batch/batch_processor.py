@@ -40,7 +40,7 @@ from osv360craft.hardware.storage_detector import estimate_output_bytes
 from osv360craft.utils.file_manager import (ProjectLayout, UnsafeOutputError, assert_safe_output, free_bytes,
                                             human_bytes, sanitize_name, unique_path)
 from osv360craft.utils.logging import get_logger
-from osv360craft.utils.process_manager import popen_flags
+from osv360craft.utils.process_manager import native_args, popen_flags
 
 log = get_logger(__name__)
 COLOUR_SUFFIX = {"dlogm": "DLogM", "pq": "PQ", "hlg": "HLG", "709-dji": "709DJI", "709-standard": "709",
@@ -327,13 +327,13 @@ class BatchProcessor:
         Returns (exit code, last lines, produced_any_progress)."""
         if self._stop.is_set():
             raise JobCancelled()
-        cmdline = subprocess.list2cmdline(args)
+        cmdline = subprocess.list2cmdline(native_args(args))
         self._log(f"$ {cmdline}")
         job.command = cmdline
         tail: list[str] = []
         progressed = False
         with self._proc_lock:
-            self._proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            self._proc = subprocess.Popen(native_args(args), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                           stdin=subprocess.DEVNULL, **popen_flags())
             p = self._proc
         assert p.stdout is not None

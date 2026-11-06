@@ -128,7 +128,7 @@ def parse_hwaccels(text: str) -> list[str]:
     return [l.strip() for l in lines[i + 1:] if l.strip()]
 
 
-def _quality_args(codec: str) -> list[str]:
+def quality_args(codec: str) -> list[str]:
     """Mirror of osvtool's FfmpegPipe rate control, so a pass here means osvtool's call works too."""
     if "nvenc" in codec:
         return ["-preset", "p5", "-rc", "vbr", "-cq", "18", "-b:v", "0", "-profile:v", "main10"]
@@ -154,7 +154,7 @@ def test_encoder(ffmpeg: str, codec: str, ten_bit: bool = True, size: str = "128
             args = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
                     f"testsrc2=s={size}:r=30", "-frames:v", "8", "-c:v", codec, "-pix_fmt", pix]
             if codec.startswith("hevc") or codec == "libx265":
-                args += _quality_args(codec)
+                args += quality_args(codec)
             args.append(str(out))
         r = pm.run(args, timeout=timeout)
         ok = r.ok and out.exists() and out.stat().st_size > 0

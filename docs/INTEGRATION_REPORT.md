@@ -61,6 +61,7 @@ The contract was verified by reading `tools/osvtool/*.cpp` and by running a CPU-
 | `--yaw/--pitch/--roll` apply only to `--mode reframe`, not to equirect output (`buildCamera`). | Orientation for 360 output comes from the gyro modes (`--stab`). The **initial viewing direction** is written into the Spherical V2 `prhd` box in place (12 bytes, no re-encode, verified with ffprobe). |
 | No CUDA-device option on the command line (only `--cl-device` for OpenCL). | The renderer is chosen per backend. Selecting between several NVIDIA GPUs is not offered. |
 | No animated reframes in the CLI. | Out of scope: OSV360Craft exports the whole sphere. |
+| On Windows, osvtool's parser (CLI11 2.7.2) treats any argument starting with `/` as a Windows-style option. Qt returns network paths as `//NAS/share/...`, so osvtool saw an option and stopped with `file is required`. This was found by the first benchmark on real hardware and reproduced with CLI11 2.7.2. | Every argument passed to a child process goes through `process_manager.native_args`, which converts `//server/share/...` and `C:/...` to native Windows form. A regression test covers it. |
 
 ## 4. Releases and Windows binaries (verified)
 

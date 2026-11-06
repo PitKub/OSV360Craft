@@ -180,6 +180,7 @@ class HardwareAnalyzerPage:
                                                   "DJI Osmo 360 (*.OSV *.osv)")
         if not clip:
             return
+        clip = str(Path(clip))  # native form (a Qt path such as //NAS/share/... becomes \\NAS\share\...)
         renderers = [n for n in ("cuda", "opencl", "metal") if rep.renderer_available(n)] + ["cpu"]
         encoders = rep.ffmpeg.verified(HEVC_CANDIDATES)
         osvtool, ff = str(rep.openosv.path), rep.ffmpeg.ffmpeg
@@ -192,7 +193,8 @@ class HardwareAnalyzerPage:
                 raise RuntimeError(f"clip could not be analysed: {info.error}")
             native = "{}x{}".format(*info.native_equirect) if info.native_equirect else None
             self._bench = benchmark.Benchmark(osvtool, ff, clip, renderers, encoders, native, rep.fingerprint(),
-                                              progress=lambda m, f: self.sig.progress.emit(m, f))
+                                              progress=lambda m, f: self.sig.progress.emit(m, f),
+                                              hwaccels=rep.ffmpeg.hwaccels, frame_count=info.frame_count)
             return self._bench.run()
 
         def done(res):

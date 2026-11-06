@@ -240,3 +240,15 @@ def test_upscale_is_labelled():
     p = make_plan(nv, ExportSettings(size="7680x3840"), clip=clip)
     size = next(d for d in p.decisions if d.key == "size")
     assert "UPSCALED" in size.value and "6000x3000" in size.value
+
+
+def test_windows_paths_reach_tools_in_native_form():
+    """Regression: Qt returns '//NAS/share/x.OSV'; CLI11 on Windows took it for an option ('file is required')."""
+    from osv360craft.utils.process_manager import native_args
+    args = ["osvtool.exe", "render", "//NAS/footage/CAM_0001_D.OSV", "--range", "0-59", "--out", "C:/Temp/s.mp4",
+            "--ffmpeg", "C:/ffmpeg/bin/ffmpeg.exe", "-vf", "scale=out_color_matrix=bt709", "f_%06d.tif"]
+    out = native_args(args, platform="win32")
+    assert out[2] == r"\\NAS\footage\CAM_0001_D.OSV"
+    assert out[6] == r"C:\Temp\s.mp4" and out[8] == r"C:\ffmpeg\bin\ffmpeg.exe"
+    assert out[3:5] == ["--range", "0-59"] and out[9:] == args[9:]  # options and filters untouched
+    assert native_args(args, platform="linux") == args

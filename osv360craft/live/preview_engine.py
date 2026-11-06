@@ -35,7 +35,7 @@ from typing import Callable
 from osv360craft.export.export_settings import ExportSettings, build_render_command
 from osv360craft.hardware.benchmark import parse_progress
 from osv360craft.utils.logging import get_logger
-from osv360craft.utils.process_manager import popen_flags
+from osv360craft.utils.process_manager import native_args, popen_flags
 
 log = get_logger(__name__)
 
@@ -196,7 +196,7 @@ class PreviewEngine:
         with self._lock:
             if not self._alive(jid):
                 return None
-            self._proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            self._proc = subprocess.Popen(native_args(args), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                           stdin=subprocess.DEVNULL, **popen_flags())
             return self._proc
 

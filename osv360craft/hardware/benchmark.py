@@ -26,10 +26,10 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from osv360craft.hardware import gpu_detector
+from osv360craft.hardware import codec_detector, gpu_detector
 from osv360craft.utils.logging import get_logger
 from osv360craft.utils.paths import user_data_dir
-from osv360craft.utils.process_manager import popen_flags
+from osv360craft.utils.process_manager import native_args, popen_flags
 
 log = get_logger(__name__)
 
@@ -136,17 +136,32 @@ class _Sampler(threading.Thread):
                     self.vram = max(self.vram or 0, u["vram_used_bytes"])
 
 
+# FFmpeg hwaccel -> (label, output format that keeps frames on the GPU).
+# With the output format set, a decoder that cannot start fails instead of
+# silently falling back to software, so a "hardware" figure is really hardware.
+HWDECODE = {"cuda": ("NVDEC (cuda)", "cuda"), "d3d11va": ("D3D11VA", "d3d11"), "qsv": ("Quick Sync (qsv)", "qsv")}
+ENCODE_FRAMES = 32
+PATTERN_FRAMES = 4
+
+
 class Benchmark:
     def __init__(self, osvtool: str | None, ffmpeg: str | None, clip: str, renderers: list[str],
                  encoders: list[str], native_size: str | None, fingerprint: str,
-                 progress: Callable[[str, float], None] | None = None) -> None:
+                 progress: Callable[[str, float], None] | None = None,
+                 hwaccels: list[str] | None = None, frame_count: int | None = None) -> None:
         self.osvtool, self.ffmpeg, self.clip = osvtool, ffmpeg, clip
+        # Hardware decoders FFmpeg reports, in the order worth trying (each tested separately).
+        self.hwaccels = [h for h in HWDECODE if h in (hwaccels or [])]
+        # Never ask for frames the clip does not have (a short test clip is fine).
+        self.stitch_frames = max(1, min(60, frame_count or 60))
+        self.fullres_frames = max(1, min(30, frame_count or 30))
         self.renderers, self.encoders, self.native_size = renderers, encoders, native_size
         self.fingerprint = fingerprint
         self.progress = progress or (lambda msg, frac: None)
         self._cancel = threading.Event()
         self._proc: subprocess.Popen | None = None
         self._sampler = _Sampler()
+        self._last_rc: int | None = None
 
     def cancel(self) -> None:
         self._cancel.set()
@@ -164,7 +179,7 @@ class Benchmark:
         t0 = time.perf_counter()
         tail: list[str] = []
         try:
-            self._proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            self._proc = subprocess.Popen(native_args(args), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                                           stdin=subprocess.DEVNULL, **popen_flags())
         except OSError as e:
             return None, 0.0, str(e)
@@ -209,6 +224,7 @@ class Benchmark:
         if self.ffmpeg:
             args[-2:-2] = ["--ffmpeg", self.ffmpeg]
         rc, secs, tail = self._run(args, timeout=600, on_line=on_line)
+        self._last_rc = rc
         if rc != 0:
             err = next((l[7:] for l in tail.splitlines() if l.startswith("error: ")), tail[-300:])
             return None, err or f"exit {rc}"
@@ -220,54 +236,78 @@ class Benchmark:
         res = BenchmarkResult(time.strftime("%Y-%m-%d %H:%M:%S"), self.fingerprint, self.clip)
         res.notes.append("Colour conversion runs inside OpenOSV's stitching kernel; it is included in the stitch figures.")
         self._sampler.start()
-        steps = 2 + len(self.renderers) + len(self.encoders) + (1 if self.native_size else 0)
+        steps = 2 + len(self.hwaccels) + len(self.renderers) + len(self.encoders) + (1 if self.native_size else 0)
         k = 0
         try:
             with tempfile.TemporaryDirectory(prefix="osv360craft_bench_") as td:
                 tdp = Path(td)
-                # 1. decode
+                # 1. decode: software, then every hardware decoder FFmpeg reports, each verified
                 if self.ffmpeg:
-                    for method, pre in (("hardware", ["-hwaccel", "auto"]), ("software", [])):
-                        self.progress(f"Decode test ({method})", k / steps)
+                    methods = [("software (CPU)", [])] + [
+                        (HWDECODE[h][0], ["-hwaccel", h, "-hwaccel_output_format", HWDECODE[h][1]]) for h in self.hwaccels]
+                    for label, pre in methods:
+                        self.progress(f"Decode test: {label}", k / steps)
                         rc, secs, tail = self._run([self.ffmpeg, "-v", "error", *pre, "-i", self.clip, "-map", "0:v:0",
-                                                    "-frames:v", "120", "-f", "null", "-"], timeout=300)
+                                                    "-frames:v", "240", "-f", "null", "-"], timeout=300)
                         if rc == 0 and secs > 0:
-                            res.decode_fps[method] = round(120 / secs, 1)
+                            res.decode_fps[label] = round(240 / secs, 1)
+                        elif pre:
+                            res.notes.append(f"Decoder {label} could not decode this clip: "
+                                             f"{(tail.strip().splitlines() or ['failed'])[-1][:160]}")
                         k += 1
-                    res.notes.append("Decode figures are for one lens stream; OpenOSV decodes two per frame.")
+                    res.notes.append("Decode figures are for one lens stream; OpenOSV decodes two per frame. "
+                                     "OpenOSV's own GPU decoding (NVDEC / D3D11VA) is used during stitching.")
                 encoder = self.encoders[0] if self.encoders else None
                 # 2. stitch per renderer
                 for dev in self.renderers:
-                    self.progress(f"Stitch test on {dev.upper()} (60 frames, 1920x960)", k / steps)
-                    fps, detail = self._render_fps(dev, "1920x960", 60, tdp / f"s_{dev}.mp4", encoder)
+                    n = self.stitch_frames
+                    self.progress(f"Stitch test on {dev.upper()} ({n} frames, 1920x960)", k / steps)
+                    fps, detail = self._render_fps(dev, "1920x960", n, tdp / f"s_{dev}.mp4", encoder)
+                    k += 1
                     if fps:
                         res.device_fps[dev] = round(fps, 2)
-                    else:
-                        res.device_errors[dev] = detail
-                    k += 1
+                        continue
+                    res.device_errors[dev] = detail
+                    if self._last_rc == 1:  # osvtool rejected the command line: no renderer will do better
+                        res.notes.append("osvtool rejected the benchmark command (usage error), so the remaining "
+                                         "renderers were not tried. This is not a GPU fault.")
+                        break
                 if res.device_fps:
                     best = max(res.device_fps, key=res.device_fps.get)
                     res.preview_fps = res.device_fps[best]
                     # 3. full resolution
                     if self.native_size:
-                        self.progress(f"Full-resolution test on {best.upper()} (30 frames, {self.native_size})", k / steps)
-                        fps, detail = self._render_fps(best, self.native_size, 30, tdp / "full.mp4", encoder)
+                        n = self.fullres_frames
+                        self.progress(f"Full-resolution test on {best.upper()} ({n} frames, {self.native_size})", k / steps)
+                        fps, detail = self._render_fps(best, self.native_size, n, tdp / "full.mp4", encoder)
                         res.fullres_fps, res.fullres_size = (round(fps, 2) if fps else None), self.native_size
                         if not fps:
                             res.notes.append(f"Full-resolution test failed: {detail}")
                         k += 1
-                # 4. encoders
-                if self.ffmpeg:
-                    for enc in self.encoders:
-                        self.progress(f"Encode test {enc} (30 frames, 7680x3840 10-bit)", k / steps)
-                        out = tdp / f"e_{enc}.mp4"
-                        rc, secs, _ = self._run([self.ffmpeg, "-v", "error", "-y", "-f", "lavfi", "-i",
-                                                 "testsrc2=s=7680x3840:r=30", "-frames:v", "30", "-pix_fmt",
-                                                 "yuv420p10le", "-c:v", enc, str(out)], timeout=600)
-                        if rc == 0 and secs > 0:
-                            res.encode_fps[enc] = round(30 / secs, 2)
-                        k += 1
-                    res.notes.append("Encode figures include generating the synthetic 8K test pattern.")
+                # 4. encoders: a short 8K 10-bit pattern is generated first (not timed), then each
+                #    verified encoder is timed on it alone, with the rate control osvtool uses.
+                if self.ffmpeg and self.encoders:
+                    pattern = tdp / "pattern_7680x3840_p010.yuv"
+                    self.progress("Preparing the 8K encode test pattern", k / steps)
+                    rc, _, tail = self._run([self.ffmpeg, "-v", "error", "-y", "-f", "lavfi", "-i",
+                                             "testsrc2=s=7680x3840:r=30", "-frames:v", str(PATTERN_FRAMES),
+                                             "-pix_fmt", "yuv420p10le", "-f", "rawvideo", str(pattern)], timeout=300)
+                    if rc != 0 or not pattern.exists():
+                        res.notes.append("The 8K encode test pattern could not be made; encoders were not timed.")
+                    else:
+                        for enc in self.encoders:
+                            self.progress(f"Encode test {enc} ({ENCODE_FRAMES} frames, 7680x3840 10-bit)", k / steps)
+                            out = tdp / f"e_{enc}.mp4"
+                            rc, secs, _ = self._run(
+                                [self.ffmpeg, "-v", "error", "-y", "-stream_loop", str(ENCODE_FRAMES // PATTERN_FRAMES - 1),
+                                 "-f", "rawvideo", "-pix_fmt", "yuv420p10le", "-s", "7680x3840", "-r", "30",
+                                 "-i", str(pattern), "-frames:v", str(ENCODE_FRAMES), "-c:v", enc,
+                                 "-pix_fmt", "yuv420p10le", *codec_detector.quality_args(enc), str(out)], timeout=900)
+                            if rc == 0 and secs > 0:
+                                res.encode_fps[enc] = round(ENCODE_FRAMES / secs, 2)
+                            k += 1
+                        res.notes.append("Encode figures use a repeating synthetic test pattern (generated beforehand, "
+                                         "not timed); real footage can encode somewhat slower.")
         finally:
             self._sampler.stop_evt.set()
             self._sampler.join(timeout=3)

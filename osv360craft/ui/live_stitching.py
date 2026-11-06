@@ -189,6 +189,7 @@ class LiveStitchingPage:
         if not rep or not rep.openosv.found:
             self.status.setText("OpenOSV (osvtool) is not available; see Hardware Analyzer.")
             return
+        path = str(Path(path))  # native form, see utils.process_manager.native_args
         self.stop()
         self.status.setText(f"Analysing {Path(path).name} ...")
         tool, ffprobe = Path(str(rep.openosv.path)), rep.ffmpeg.ffprobe

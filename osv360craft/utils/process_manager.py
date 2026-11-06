@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import ntpath
+import re
 import shutil
 import subprocess
 import sys
@@ -41,9 +43,29 @@ class RunResult:
         return self.returncode == 0 and not self.timed_out and not self.error
 
 
+_WIN_PATH = re.compile(r"^(//|\\\\|[A-Za-z]:[/\\])")
+
+
+def native_args(args: Sequence[str | Path], platform: str | None = None) -> list[str]:
+    """Arguments for a child process, with Windows paths in native form.
+
+    OpenOSV's osvtool parses its command line with CLI11, which on Windows
+    treats any argument starting with '/' as a Windows-style option. Qt's file
+    dialogs return forward-slash paths, so a recording on a network share,
+    '//NAS/footage/CAM_0001.OSV', reached osvtool as an option and it failed
+    with 'file is required'. Converting to '\\\\NAS\\footage\\CAM_0001.OSV'
+    (and 'C:/x' to 'C:\\x') fixes this for every tool.
+    """
+    plat = platform or sys.platform
+    out = [str(a) for a in args]
+    if plat != "win32":
+        return out
+    return [ntpath.normpath(a) if _WIN_PATH.match(a) else a for a in out]
+
+
 def run(args: Sequence[str | Path], timeout: float = 30.0, cwd: str | Path | None = None,
         env: dict | None = None) -> RunResult:
-    argv = [str(a) for a in args]
+    argv = native_args(args)
     try:
         cp = subprocess.run(
             argv, capture_output=True, timeout=timeout, cwd=cwd, env=env,
